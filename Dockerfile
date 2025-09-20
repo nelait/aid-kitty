@@ -6,8 +6,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY client/package*.json ./client/
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including devDependencies for tsx)
+RUN npm ci
 RUN cd client && npm ci
 
 # Copy source code
@@ -31,5 +31,9 @@ EXPOSE 8080
 ENV NODE_ENV=production
 ENV PORT=8080
 
-# Start command with proper signal handling
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/api/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"
+
+# Start command
 CMD ["node", "--no-deprecation", "node_modules/.bin/tsx", "server/index.ts"]
