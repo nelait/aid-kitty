@@ -2,6 +2,6 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "tsx server/index.ts"
+startCommand = "npm start"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
