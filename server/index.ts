@@ -969,7 +969,7 @@ async function startServer() {
       fileProcessor.cleanupOldFiles(24);
     }, 60 * 60 * 1000); // Every hour
 
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ AID Kitty server running on port ${PORT}`);
       console.log(`🤖 Available AI providers: ${aiFactory.getAvailableProviders().join(', ')}`);
     });
