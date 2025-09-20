@@ -1,0 +1,11 @@
+node_modules
+.git
+.env
+.env.local
+*.log
+dist
+data/app.db
+uploads
+.DS_Store
+client/node_modules
+client/dist
