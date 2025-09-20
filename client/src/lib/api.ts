@@ -1,18 +1,13 @@
 import axios from 'axios';
 
-// Auto-detect API base URL based on environment
+// Auto-detect API base URL at runtime
 const getApiBaseUrl = () => {
-  // If VITE_API_URL is explicitly set, use it
-  if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
+  // Check if we're in development (localhost)
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return '/api'; // Use Vite proxy in development
   }
   
-  // In development, use proxy
-  if (import.meta.env.DEV) {
-    return '/api';
-  }
-  
-  // In production, use the same origin (Railway deployment)
+  // In production (Railway or any other deployment), use relative URLs
   return '/api';
 };
 
