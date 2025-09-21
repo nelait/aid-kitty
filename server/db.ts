@@ -23,7 +23,7 @@ export const db = drizzle(sql, { schema });
  * Custom migration runner that handles multiple SQL statements
  */
 async function runCustomMigrations(migrationsFolder: string) {
-  // Create migrations tracking table if it doesn't exist
+  // First, create migrations tracking table if it doesn't exist with BIGINT for created_at
   await sql`
     CREATE TABLE IF NOT EXISTS __drizzle_migrations (
       id SERIAL PRIMARY KEY,
@@ -32,8 +32,32 @@ async function runCustomMigrations(migrationsFolder: string) {
     )
   `;
 
+  // Check if we need to alter the created_at column
+  try {
+    // Check if the column exists and is of type integer
+    const result = await sql`
+      SELECT data_type 
+      FROM information_schema.columns 
+      WHERE table_name = '__drizzle_migrations' 
+      AND column_name = 'created_at'
+      AND data_type = 'integer'
+    `;
+    
+    if (result.length > 0) {
+      console.log('Altering __drizzle_migrations table to use BIGINT for created_at...');
+      await sql`
+        ALTER TABLE __drizzle_migrations 
+        ALTER COLUMN created_at TYPE BIGINT
+        USING created_at::bigint
+      `;
+    }
+  } catch (error) {
+    console.error('Error checking/altering __drizzle_migrations table:', error);
+    // Continue with migrations even if there's an error
+  }
+
   // Clear migration history to start fresh (temporary fix for schema conflicts)
-  console.log(' Clearing migration history to resolve schema conflicts...');
+  console.log('Clearing migration history to resolve schema conflicts...');
   await sql`DELETE FROM __drizzle_migrations`;
 
   // Get list of migration files
