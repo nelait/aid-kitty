@@ -24,7 +24,7 @@ export const db = drizzle(sql, { schema });
  */
 async function runCustomMigrations(migrationsFolder: string) {
   // Create migrations tracking table if it doesn't exist
-  sql`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
+  await sql`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
     id SERIAL PRIMARY KEY,
     hash TEXT NOT NULL,
     created_at INTEGER
@@ -32,7 +32,7 @@ async function runCustomMigrations(migrationsFolder: string) {
 
   // Clear migration history to start fresh (temporary fix for schema conflicts)
   console.log(' Clearing migration history to resolve schema conflicts...');
-  sql`DELETE FROM __drizzle_migrations`;
+  await sql`DELETE FROM __drizzle_migrations`;
 
   // Get list of migration files
   const migrationFiles = fs.readdirSync(migrationsFolder)
@@ -47,39 +47,19 @@ async function runCustomMigrations(migrationsFolder: string) {
     console.log(` Applying migration: ${file}`);
 
     try {
-      // Split SQL content by semicolons
-      const statements = fileContent
-        .split(';')
-        .map(stmt => stmt.trim())
-        .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'));
-
-      // Execute each statement individually
-      for (let i = 0; i < statements.length; i++) {
-        let statement = statements[i];
-        if (statement) {
-          console.log(`  📝 Executing statement ${i + 1}/${statements.length}`);
-          
-          try {
-            // Convert CREATE TABLE to CREATE TABLE IF NOT EXISTS to handle existing tables
-            if (statement.trim().startsWith('CREATE TABLE ') && !statement.includes('IF NOT EXISTS')) {
-              statement = statement.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS ');
-              console.log(`    🔧 Modified to use IF NOT EXISTS`);
-            }
-            
-            await sql.unsafe(statement);
-          } catch (statementError: any) {
-            // Handle specific errors that are safe to ignore
-            if (statementError.code === '42P07') { // duplicate_table
-              console.log(`    Ignoring safe error: ${statementError.message}`);
-              continue;
-            }
-            throw statementError;
-          }
-        }
-      }
+      // Execute the entire migration file as a single transaction
+      console.log(`  📝 Executing migration file in single transaction`);
+      
+      // Remove comments and empty lines for cleaner execution
+      const cleanedContent = fileContent
+        .split('\n')
+        .filter(line => !line.trim().startsWith('--') && line.trim().length > 0)
+        .join('\n');
+      
+      await sql.unsafe(cleanedContent);
 
       // Record the migration as applied
-      sql`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (${fileHash}, ${Date.now()})`;
+      await sql`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (${fileHash}, ${Date.now()})`;
 
       console.log(` Migration ${file} applied successfully`);
     } catch (error) {
