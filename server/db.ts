@@ -47,9 +47,9 @@ async function runCustomMigrations(migrationsFolder: string) {
     console.log(` Applying migration: ${file}`);
 
     try {
-      // Split SQL content by statement breakpoints
+      // Split SQL content by semicolons
       const statements = fileContent
-        .split('--> statement-breakpoint')
+        .split(';')
         .map(stmt => stmt.trim())
         .filter(stmt => stmt.length > 0 && !stmt.startsWith('--'));
 
@@ -57,16 +57,16 @@ async function runCustomMigrations(migrationsFolder: string) {
       for (let i = 0; i < statements.length; i++) {
         let statement = statements[i];
         if (statement) {
-          console.log(`  Executing statement ${i + 1}/${statements.length}`);
+          console.log(`  📝 Executing statement ${i + 1}/${statements.length}`);
           
           try {
             // Convert CREATE TABLE to CREATE TABLE IF NOT EXISTS to handle existing tables
             if (statement.trim().startsWith('CREATE TABLE ') && !statement.includes('IF NOT EXISTS')) {
               statement = statement.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS ');
-              console.log(`    Modified to use IF NOT EXISTS`);
+              console.log(`    🔧 Modified to use IF NOT EXISTS`);
             }
             
-            sql`${statement}`;
+            await sql.unsafe(statement);
           } catch (statementError: any) {
             // Handle specific errors that are safe to ignore
             if (statementError.code === '42P07') { // duplicate_table
