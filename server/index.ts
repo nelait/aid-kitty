@@ -372,7 +372,10 @@ app.delete('/api/api-keys/:id', authenticateToken, async (req: AuthenticatedRequ
     const { eq, and } = await import('drizzle-orm');
 
     await db.delete(apiKeys).where(
-      and(eq(apiKeys.id, id), eq(apiKeys.userId, req.user.id))
+      and(
+        eq(apiKeys.id, id),
+        eq(apiKeys.userId, req.user.id)
+      )
     );
 
     res.json({ success: true });
@@ -939,7 +942,7 @@ app.use('/api/prompt-builder', promptBuilderRoutes);
 
 // Serve static files from the React app in production
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client'), {
+  app.use(express.static('/app/client/dist', {
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.js') || filePath.endsWith('.mjs')) {
         res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
@@ -953,7 +956,7 @@ if (process.env.NODE_ENV === 'production') {
   
   // Catch all handler: send back React's index.html file for any non-API routes
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
+    res.sendFile('/app/client/dist/index.html');
   });
 }
 
