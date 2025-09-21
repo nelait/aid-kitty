@@ -24,11 +24,13 @@ export const db = drizzle(sql, { schema });
  */
 async function runCustomMigrations(migrationsFolder: string) {
   // Create migrations tracking table if it doesn't exist
-  await sql`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
-    id SERIAL PRIMARY KEY,
-    hash TEXT NOT NULL,
-    created_at INTEGER
-  )`;
+  await sql`
+    CREATE TABLE IF NOT EXISTS __drizzle_migrations (
+      id SERIAL PRIMARY KEY,
+      hash TEXT NOT NULL,
+      created_at BIGINT
+    )
+  `;
 
   // Clear migration history to start fresh (temporary fix for schema conflicts)
   console.log(' Clearing migration history to resolve schema conflicts...');
