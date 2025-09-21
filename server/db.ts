@@ -1,43 +1,38 @@
-import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 import fs from 'fs';
 import path from 'path';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 // Import our schema
 import * as schema from '../shared/schema';
 
-const DATABASE_PATH = process.env.DATABASE_PATH || './data/app.db';
+// Use PostgreSQL connection string from environment
+const DATABASE_URL = process.env.DATABASE_URL;
 
-const dataDir = path.dirname(DATABASE_PATH);
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is required');
 }
 
-// Create SQLite connection
-const sqlite = new Database(DATABASE_PATH);
+// Create PostgreSQL connection
+const sql = postgres(DATABASE_URL);
 
-// Enable foreign keys
-sqlite.pragma('foreign_keys = ON');
-
-// Initialize Drizzle ORM
-export const db = drizzle(sqlite, { schema });
+// Initialize Drizzle ORM with PostgreSQL
+export const db = drizzle(sql, { schema });
 
 /**
  * Custom migration runner that handles multiple SQL statements
  */
 async function runCustomMigrations(migrationsFolder: string) {
   // Create migrations tracking table if it doesn't exist
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS __drizzle_migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      hash TEXT NOT NULL,
-      created_at INTEGER
-    )
-  `);
+  sql`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
+    id SERIAL PRIMARY KEY,
+    hash TEXT NOT NULL,
+    created_at INTEGER
+  )`;
 
   // Clear migration history to start fresh (temporary fix for schema conflicts)
-  console.log('🔄 Clearing migration history to resolve schema conflicts...');
-  sqlite.exec('DELETE FROM __drizzle_migrations');
+  console.log(' Clearing migration history to resolve schema conflicts...');
+  sql`DELETE FROM __drizzle_migrations`;
 
   // Get list of migration files
   const migrationFiles = fs.readdirSync(migrationsFolder)
@@ -49,7 +44,7 @@ async function runCustomMigrations(migrationsFolder: string) {
     const fileContent = fs.readFileSync(filePath, 'utf8');
     const fileHash = file; // Use filename as hash for simplicity
 
-    console.log(`🔄 Applying migration: ${file}`);
+    console.log(` Applying migration: ${file}`);
 
     try {
       // Split SQL content by statement breakpoints
@@ -62,27 +57,21 @@ async function runCustomMigrations(migrationsFolder: string) {
       for (let i = 0; i < statements.length; i++) {
         let statement = statements[i];
         if (statement) {
-          console.log(`  📝 Executing statement ${i + 1}/${statements.length}`);
+          console.log(`  Executing statement ${i + 1}/${statements.length}`);
           
           try {
             // Convert CREATE TABLE to CREATE TABLE IF NOT EXISTS to handle existing tables
             if (statement.trim().startsWith('CREATE TABLE ') && !statement.includes('IF NOT EXISTS')) {
               statement = statement.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS ');
-              console.log(`    🔧 Modified to use IF NOT EXISTS`);
+              console.log(`    Modified to use IF NOT EXISTS`);
             }
             
-            sqlite.exec(statement);
+            sql`${statement}`;
           } catch (statementError: any) {
             // Handle specific errors that are safe to ignore
-            if (statementError.code === 'SQLITE_ERROR') {
-              const errorMsg = statementError.message.toLowerCase();
-              if (errorMsg.includes('already exists') || 
-                  errorMsg.includes('duplicate column') ||
-                  errorMsg.includes('no such column') ||
-                  errorMsg.includes('no such table')) {
-                console.log(`    ⚠️ Ignoring safe error: ${statementError.message}`);
-                continue;
-              }
+            if (statementError.code === '42P07') { // duplicate_table
+              console.log(`    Ignoring safe error: ${statementError.message}`);
+              continue;
             }
             throw statementError;
           }
@@ -90,16 +79,13 @@ async function runCustomMigrations(migrationsFolder: string) {
       }
 
       // Record the migration as applied
-      sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run(
-        fileHash,
-        Date.now()
-      );
+      sql`INSERT INTO __drizzle_migrations (hash, created_at) VALUES (${fileHash}, ${Date.now()})`;
 
-      console.log(`✅ Migration ${file} applied successfully`);
+      console.log(` Migration ${file} applied successfully`);
     } catch (error) {
-      console.error(`❌ Error applying migration ${file}:`, error);
+      console.error(` Error applying migration ${file}:`, error);
       // Don't throw the error, just log it and continue with next migration
-      console.log(`⚠️ Continuing with next migration...`);
+      console.log(` Continuing with next migration...`);
     }
   }
 }
@@ -111,22 +97,22 @@ export async function runMigrations() {
   const migrationsFolder = path.join(process.cwd(), 'migrations');
   
   try {
-    console.log('🔄 Running database migrations');
-    console.log('📁 Migrations folder:', migrationsFolder);
-    console.log('🗄️ Database path:', DATABASE_PATH);
+    console.log(' Running database migrations');
+    console.log(' Migrations folder:', migrationsFolder);
+    console.log(' Database URL:', DATABASE_URL);
     
     // Check if the migrations folder exists
     if (!fs.existsSync(migrationsFolder)) {
-      console.log('📝 No migrations folder found, creating initial database structure');
+      console.log(' No migrations folder found, creating initial database structure');
       return;
     }
     
     // Run custom migrations
     await runCustomMigrations(migrationsFolder);
-    console.log('✅ Migrations completed successfully');
+    console.log(' Migrations completed successfully');
     
   } catch (error) {
-    console.error('❌ Error running migrations:', error);
+    console.error(' Error running migrations:', error);
     throw error;
   }
 }
