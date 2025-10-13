@@ -111,14 +111,23 @@ ${selectedFeatures.map(feature => `- ${feature}`).join('\n')}
   private generateArchitectureSection(architecture: ArchitectureGuidelines): string {
     return `## 🏗️ Architecture Guidelines
 
-**Patterns**:
-${architecture.patterns?.map(pattern => `- ${pattern}`).join('\n') || 'No patterns specified'}
+**Pattern**: ${architecture.pattern}
 
-**Data Flow**:
-${architecture.dataFlow?.map(flow => `- ${flow}`).join('\n') || 'No data flow specified'}
+**Description**: ${architecture.description}
 
-**Routing**:
-${architecture.routing?.map(route => `- ${route}`).join('\n') || 'No routing specified'}`;
+**Project Structure**:
+${architecture.structure?.directories?.map(dir => `- ${dir}`).join('\n') || 'No directory structure specified'}
+
+**Key Files**:
+${architecture.structure?.files?.map(file => `- ${file}`).join('\n') || 'No key files specified'}
+
+**Conventions**:
+${architecture.structure?.conventions?.map(conv => `- ${conv}`).join('\n') || 'No conventions specified'}
+
+**Data Flow**: ${architecture.dataFlow || 'Not specified'}
+
+${architecture.stateManagement ? `**State Management**: ${architecture.stateManagement}\n` : ''}
+${architecture.apiDesign ? `**API Design**: ${architecture.apiDesign}` : ''}`;
   }
 
   private generateGuidelinesSection(guidelines: any): string {
@@ -267,6 +276,10 @@ ${performance.loading.map((item: string) => `- ${item}`).join('\n')}
   }
 
   private generateBestPracticesSection(bestPractices: BestPracticeItem[]): string {
+    if (!bestPractices || bestPractices.length === 0) {
+      return `## ✨ Best Practices\n\nNo best practices specified.`;
+    }
+    
     const grouped = bestPractices.reduce((acc, practice) => {
       if (!acc[practice.category]) acc[practice.category] = [];
       acc[practice.category].push(practice);

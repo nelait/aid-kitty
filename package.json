@@ -15,6 +15,7 @@
     "start": "node --no-deprecation node_modules/.bin/tsx server/index.ts",
     "migrate": "drizzle-kit migrate",
     "seed-templates": "tsx server/seed-prompt-templates.ts",
+    "seed-chat-templates": "tsx server/seed-chat-templates.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
@@ -50,7 +51,7 @@
     "@types/node": "^22.10.1",
     "@types/pdf-parse": "^1.1.4",
     "@types/uuid": "^10.0.0",
-    "drizzle-kit": "^0.30.0",
+    "drizzle-kit": "^0.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
