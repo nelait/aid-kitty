@@ -198,9 +198,10 @@ export function initializeProviders(): AIProviderFactory {
 
   console.log('Available providers:', factory.getAvailableProviders());
 
-  // Throw error if no providers are available
+  // Warn but don't crash if no providers are available
+  // Azure Managed App users configure API keys after deployment via the Settings page
   if (factory.getAvailableProviders().length === 0) {
-    throw new Error('No AI providers configured. Please add valid API keys to your .env file.');
+    console.warn('⚠️  No AI providers configured. Users can add API keys via Settings page.');
   }
 
   return factory;
