@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=postgresql://aidkitty:aidkitty_secret@db:5432/aidkitty
+      - JWT_SECRET=local-dev-jwt-secret-change-in-production
+      - FRONTEND_URL=http://localhost:3001
+      # AI Provider keys (optional for local testing)
+      # - OPENAI_API_KEY=your_key_here
+      # - MICROSOFT_CLIENT_ID=your_client_id
+      # - MICROSOFT_CLIENT_SECRET=your_client_secret
+      # - MICROSOFT_TENANT_ID=common
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=aidkitty
+      - POSTGRES_PASSWORD=aidkitty_secret
+      - POSTGRES_DB=aidkitty
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aidkitty -d aidkitty"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

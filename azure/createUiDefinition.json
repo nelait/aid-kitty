@@ -1,0 +1,211 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [
+      {
+        "name": "appName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Application Name",
+        "defaultValue": "aidkitty",
+        "toolTip": "Name prefix for all deployed resources.",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-z0-9]{3,20}$",
+          "validationMessage": "Must be 3-20 lowercase letters/numbers."
+        }
+      },
+      {
+        "name": "adminEmail",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Admin Email",
+        "toolTip": "Email for the initial admin account.",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+          "validationMessage": "Please enter a valid email address."
+        }
+      }
+    ],
+    "steps": [
+      {
+        "name": "infrastructure",
+        "label": "Infrastructure Settings",
+        "elements": [
+          {
+            "name": "appServiceSku",
+            "type": "Microsoft.Common.DropDown",
+            "label": "App Service Plan SKU",
+            "defaultValue": "B1 — Basic (dev/test)",
+            "toolTip": "Select the compute size for your application.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "B1 — Basic (dev/test)", "value": "B1" },
+                { "label": "B2 — Basic (small production)", "value": "B2" },
+                { "label": "S1 — Standard (production)", "value": "S1" },
+                { "label": "S2 — Standard (high traffic)", "value": "S2" },
+                { "label": "P1v2 — Premium (enterprise)", "value": "P1v2" }
+              ]
+            }
+          },
+          {
+            "name": "postgresSku",
+            "type": "Microsoft.Common.DropDown",
+            "label": "PostgreSQL Server SKU",
+            "defaultValue": "Standard_B1ms — Burstable (dev/test)",
+            "toolTip": "Select the database compute size.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Standard_B1ms — Burstable (dev/test)", "value": "Standard_B1ms" },
+                { "label": "Standard_B2s — Burstable (production)", "value": "Standard_B2s" },
+                { "label": "Standard_D2s_v3 — General Purpose (enterprise)", "value": "Standard_D2s_v3" }
+              ]
+            }
+          },
+          {
+            "name": "postgresAdminLogin",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Database Admin Username",
+            "defaultValue": "aidkittyadmin",
+            "toolTip": "Administrator username for PostgreSQL.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-zA-Z][a-zA-Z0-9]{2,30}$",
+              "validationMessage": "3-31 characters, start with a letter."
+            }
+          },
+          {
+            "name": "postgresAdminPassword",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Database Admin Password",
+              "confirmPassword": "Confirm Password"
+            },
+            "toolTip": "Must be at least 8 characters with uppercase, lowercase, and digits.",
+            "constraints": {
+              "required": true,
+              "regex": "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,128}$",
+              "validationMessage": "At least 8 characters with upper, lower, and digits."
+            }
+          },
+          {
+            "name": "jwtSecret",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "JWT Secret",
+              "confirmPassword": "Confirm JWT Secret"
+            },
+            "toolTip": "Secret key used for signing authentication tokens. Use a long random string.",
+            "constraints": {
+              "required": true,
+              "regex": "^.{16,256}$",
+              "validationMessage": "Must be at least 16 characters."
+            }
+          }
+        ]
+      },
+      {
+        "name": "microsoftSso",
+        "label": "Microsoft SSO (Optional)",
+        "elements": [
+          {
+            "name": "ssoInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "text": "Configure Microsoft Entra ID SSO for enterprise single sign-on. Leave blank to skip.",
+              "style": "Info"
+            }
+          },
+          {
+            "name": "microsoftClientId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Entra ID Client ID",
+            "defaultValue": "",
+            "toolTip": "Application (client) ID from your Azure AD app registration.",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "microsoftClientSecret",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Entra ID Client Secret",
+              "confirmPassword": "Confirm Client Secret"
+            },
+            "toolTip": "Client secret from your Azure AD app registration.",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "microsoftTenantId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Tenant ID",
+            "defaultValue": "common",
+            "toolTip": "Azure AD Tenant ID. Use 'common' for multi-tenant.",
+            "constraints": {
+              "required": false
+            }
+          }
+        ]
+      },
+      {
+        "name": "aiProviders",
+        "label": "AI Providers (Optional)",
+        "elements": [
+          {
+            "name": "aiInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "text": "Add API keys for AI providers. Users can also add keys later from the app settings page.",
+              "style": "Info"
+            }
+          },
+          {
+            "name": "openaiApiKey",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "OpenAI API Key",
+              "confirmPassword": "Confirm Key"
+            },
+            "toolTip": "Optional. Your OpenAI API key for GPT-4 access.",
+            "constraints": {
+              "required": false
+            }
+          },
+          {
+            "name": "anthropicApiKey",
+            "type": "Microsoft.Common.PasswordBox",
+            "label": {
+              "password": "Anthropic API Key",
+              "confirmPassword": "Confirm Key"
+            },
+            "toolTip": "Optional. Your Anthropic API key for Claude access.",
+            "constraints": {
+              "required": false
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "appName": "[basics('appName')]",
+      "adminEmail": "[basics('adminEmail')]",
+      "location": "[location()]",
+      "appServiceSkuName": "[steps('infrastructure').appServiceSku]",
+      "postgresSku": "[steps('infrastructure').postgresSku]",
+      "postgresAdminLogin": "[steps('infrastructure').postgresAdminLogin]",
+      "postgresAdminPassword": "[steps('infrastructure').postgresAdminPassword]",
+      "jwtSecret": "[steps('infrastructure').jwtSecret]",
+      "microsoftClientId": "[steps('microsoftSso').microsoftClientId]",
+      "microsoftClientSecret": "[steps('microsoftSso').microsoftClientSecret]",
+      "microsoftTenantId": "[steps('microsoftSso').microsoftTenantId]",
+      "openaiApiKey": "[steps('aiProviders').openaiApiKey]",
+      "anthropicApiKey": "[steps('aiProviders').anthropicApiKey]"
+    }
+  }
+}
