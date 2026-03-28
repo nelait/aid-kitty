@@ -1686,11 +1686,12 @@ app.use('/api/prompt-builder', promptBuilderRoutes);
 
 // Serve static files from the React app in production
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client')));
+  const clientDistPath = path.join(__dirname, '../client/dist');
+  app.use(express.static(clientDistPath));
 
   // Catch all handler: send back React's index.html file for any non-API routes
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
+    res.sendFile(path.join(clientDistPath, 'index.html'));
   });
 }
 
