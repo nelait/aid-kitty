@@ -9,7 +9,7 @@ import { Bot, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
   const [, setLocation] = useLocation();
-  const { login } = useAuth();
+  const { login, loginWithMicrosoft, microsoftEnabled } = useAuth();
   const { toast } = useToast();
   
   const [formData, setFormData] = useState({
@@ -17,6 +17,7 @@ export default function LoginPage() {
     password: '',
   });
   const [loading, setLoading] = useState(false);
+  const [msLoading, setMsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -38,6 +39,20 @@ export default function LoginPage() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleMicrosoftLogin = async () => {
+    setMsLoading(true);
+    try {
+      await loginWithMicrosoft();
+    } catch (error: any) {
+      toast({
+        title: "Microsoft sign-in failed",
+        description: error.message || "Could not connect to Microsoft",
+        variant: "destructive",
+      });
+      setMsLoading(false);
     }
   };
 
@@ -69,6 +84,43 @@ export default function LoginPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {microsoftEnabled && (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-11 mb-4 flex items-center justify-center gap-2 border-gray-300 hover:bg-gray-50"
+                  onClick={handleMicrosoftLogin}
+                  disabled={msLoading}
+                >
+                  {msLoading ? (
+                    <div className="flex items-center">
+                      <div className="spinner mr-2"></div>
+                      Connecting...
+                    </div>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 23 23">
+                        <path fill="#f35325" d="M1 1h10v10H1z"/>
+                        <path fill="#81bc06" d="M12 1h10v10H12z"/>
+                        <path fill="#05a6f0" d="M1 12h10v10H1z"/>
+                        <path fill="#ffba08" d="M12 12h10v10H12z"/>
+                      </svg>
+                      Sign in with Microsoft
+                    </>
+                  )}
+                </Button>
+                <div className="relative mb-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-gray-500">Or continue with email</span>
+                  </div>
+                </div>
+              </>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <label htmlFor="email" className="text-sm font-medium text-gray-700">

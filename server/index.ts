@@ -24,6 +24,9 @@ import { MVPGenerator } from './ai/mvp-generator';
 import { DocumentGenerator } from './ai/document-generator';
 import { FileProcessor } from './utils/file-processor';
 import { AuthService, authenticateToken, AuthenticatedRequest } from './auth';
+import { createMicrosoftAuthRouter, isMicrosoftAuthConfigured } from './microsoft-auth';
+import { createLandingPageRouter } from './marketplace/landing-page';
+import { createWebhookRouter } from './marketplace/webhook';
 import promptBuilderRoutes from './routes/prompt-builder';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1683,6 +1686,16 @@ app.get('/api/openhands/builds', authenticateToken, async (req: AuthenticatedReq
 
 // Register routes
 app.use('/api/prompt-builder', promptBuilderRoutes);
+
+// Microsoft Entra ID auth routes
+if (isMicrosoftAuthConfigured()) {
+  app.use('/api/auth/microsoft', createMicrosoftAuthRouter());
+  console.log('🔐 Microsoft Entra ID authentication enabled');
+}
+
+// Marketplace routes (SaaS landing page and webhook)
+app.use('/api/marketplace/landing', createLandingPageRouter());
+app.use('/api/marketplace/webhook', createWebhookRouter());
 
 // Serve static files from the React app in production
 if (process.env.NODE_ENV === 'production') {

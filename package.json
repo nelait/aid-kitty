@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.37.0",
+    "@azure/msal-node": "^3.8.10",
     "@google/generative-ai": "^0.22.0",
     "@paralleldrive/cuid2": "^2.2.2",
     "axios": "^1.13.4",

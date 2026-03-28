@@ -31,7 +31,7 @@ const queryClient = new QueryClient({
 
 function App() {
   const [location] = useLocation();
-  const isAuthPage = location === '/login' || location === '/register';
+  const isAuthPage = location === '/login' || location === '/register' || location.startsWith('/auth/');
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -44,6 +44,7 @@ function App() {
                 <Switch>
                   <Route path="/login" component={LoginPage} />
                   <Route path="/register" component={RegisterPage} />
+                  <Route path="/auth/callback">{() => <div className="flex items-center justify-center min-h-screen"><p>Signing in...</p></div>}</Route>
                   <Route path="/" component={DashboardPage} />
                   <Route path="/dashboard" component={DashboardPage} />
                   <Route path="/generate" component={GeneratePage} />
