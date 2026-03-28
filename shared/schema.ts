@@ -8,6 +8,9 @@ export const users = pgTable('users', {
   username: text('username').notNull().unique(),
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
+  microsoftId: text('microsoft_id'),   // Azure AD object ID (oid)
+  tenantId: text('tenant_id'),         // Azure AD tenant ID
+  authProvider: text('auth_provider', { enum: ['local', 'microsoft'] }).default('local'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -252,6 +255,26 @@ export const promptBuilderSessions = pgTable('prompt_builder_sessions', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+// Marketplace subscriptions table
+export const subscriptions = pgTable('subscriptions', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  marketplaceSubscriptionId: text('marketplace_subscription_id').notNull().unique(),
+  offerId: text('offer_id').notNull(),
+  planId: text('plan_id').notNull(),
+  status: text('status', {
+    enum: ['pending', 'active', 'suspended', 'unsubscribed']
+  }).default('pending'),
+  quantity: integer('quantity').default(1),
+  beneficiaryEmail: text('beneficiary_email'),
+  beneficiaryId: text('beneficiary_id'),       // Azure AD oid of beneficiary
+  purchaserEmail: text('purchaser_email'),
+  purchaserId: text('purchaser_id'),           // Azure AD oid of purchaser
+  saasSubscriptionStatus: text('saas_subscription_status'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
 // Export types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -273,6 +296,8 @@ export type ChatTemplate = typeof chatTemplates.$inferSelect;
 export type NewChatTemplate = typeof chatTemplates.$inferInsert;
 export type EstimationSetting = typeof estimationSettings.$inferSelect;
 export type NewEstimationSetting = typeof estimationSettings.$inferInsert;
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;
 
 // Prompt Builder Types
 export type ApplicationType = 'web' | 'mobile' | 'rag' | 'api' | 'desktop' | 'ml' | 'blockchain' | 'iot' | 'game' | 'cli' | 'microservice' | 'chrome-extension' | 'electron' | 'pwa';
