@@ -1,40 +1,19 @@
 {
-  "version": "7",
-  "dialect": "sqlite",
+  "version": "5",
+  "dialect": "pg",
   "entries": [
     {
       "idx": 0,
-      "version": "6",
-      "when": 1756759557236,
-      "tag": "0000_tired_jigsaw",
+      "version": "7",
+      "when": 1770363136503,
+      "tag": "0000_real_bullseye",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "6",
-      "when": 1703123456790,
-      "tag": "0002_fix_schema_consistency",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1703123456791,
-      "tag": "0003_create_estimation_settings",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1703123456792,
-      "tag": "0004_add_generated_documents",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "6",
-      "when": 1757048295060,
-      "tag": "0004_minor_the_watchers",
+      "version": "7",
+      "when": 1770410601978,
+      "tag": "0001_nebulous_sumo",
       "breakpoints": true
     }
   ]

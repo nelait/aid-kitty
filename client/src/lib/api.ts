@@ -103,9 +103,9 @@ export const chatAPI = {
     return response.data;
   },
 
-  sendMessage: async (data: { 
-    content: string; 
-    provider: string; 
+  sendMessage: async (data: {
+    content: string;
+    provider: string;
     projectId?: number;
   }) => {
     const response = await api.post('/chat/messages', data);
@@ -192,6 +192,11 @@ export const documentsAPI = {
     const response = await api.get(`/projects/${projectId}/documents`);
     return response.data;
   },
+
+  updateDocument: async (id: string, content: string) => {
+    const response = await api.put(`/documents/${id}`, { content });
+    return response.data;
+  },
 };
 
 export const estimationSettingsAPI = {
@@ -215,4 +220,73 @@ export const estimationSettingsAPI = {
     isDefault?: boolean;
   }) => api.put(`/estimation-settings/${id}`, data),
   delete: (id: string) => api.delete(`/estimation-settings/${id}`)
+};
+
+export const githubAPI = {
+  getSettings: async () => {
+    const response = await api.get('/github/settings');
+    return response.data;
+  },
+  connect: async (accessToken: string, options?: { defaultRepo?: string; defaultBranch?: string; defaultPath?: string }) => {
+    const response = await api.post('/github/connect', { accessToken, ...options });
+    return response.data;
+  },
+  disconnect: async () => {
+    const response = await api.delete('/github/disconnect');
+    return response.data;
+  },
+  listRepos: async () => {
+    const response = await api.get('/github/repos');
+    return response.data;
+  },
+  listBranches: async (owner: string, repo: string) => {
+    const response = await api.get(`/github/branches/${owner}/${repo}`);
+    return response.data;
+  },
+  push: async (data: { projectId: string; repo: string; branch?: string; path?: string; documentIds?: string[] }) => {
+    const response = await api.post('/github/push', data);
+    return response.data;
+  },
+  pushPrompts: async (data: { sessionIds: string[]; repo: string; branch?: string; path?: string }) => {
+    const response = await api.post('/github/push-prompts', data);
+    return response.data;
+  },
+  pushTemplates: async (data: { templateIds: string[]; repo: string; branch?: string; path?: string }) => {
+    const response = await api.post('/github/push-templates', data);
+    return response.data;
+  },
+};
+
+export const promptSessionsAPI = {
+  update: async (sessionId: string, generatedPrompt: string) => {
+    const response = await api.put(`/prompt-builder/sessions/${sessionId}`, { generatedPrompt });
+    return response.data;
+  },
+};
+
+export const openhandsAPI = {
+  getSettings: async () => {
+    const response = await api.get('/openhands/settings');
+    return response.data;
+  },
+  saveSettings: async (data: { apiKey: string; defaultRepo?: string; defaultBranch?: string }) => {
+    const response = await api.post('/openhands/settings', data);
+    return response.data;
+  },
+  disconnect: async () => {
+    const response = await api.delete('/openhands/settings');
+    return response.data;
+  },
+  startBuild: async (data: { prompt: string; repository: string; sessionId?: string }) => {
+    const response = await api.post('/openhands/build', data);
+    return response.data;
+  },
+  getBuildStatus: async (buildId: string) => {
+    const response = await api.get(`/openhands/builds/${buildId}/status`);
+    return response.data;
+  },
+  listBuilds: async () => {
+    const response = await api.get('/openhands/builds');
+    return response.data;
+  },
 };

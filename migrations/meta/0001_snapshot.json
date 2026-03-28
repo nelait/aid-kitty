@@ -1,68 +1,63 @@
 {
-  "version": "6",
-  "dialect": "sqlite",
-  "id": "82502341-563b-4386-8532-966ad8f119c7",
-  "prevId": "5740312d-95b8-45a0-aa4b-72759911afcf",
+  "id": "4a6d3ea0-6408-4958-9f08-a98179c32890",
+  "prevId": "3af7ad40-3965-49be-83fb-538bd258a5d2",
+  "version": "7",
+  "dialect": "postgresql",
   "tables": {
-    "api_keys": {
+    "public.api_keys": {
       "name": "api_keys",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "provider": {
           "name": "provider",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "key": {
           "name": "key",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "name": {
           "name": "name",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "is_active": {
           "name": "is_active",
-          "type": "integer",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false,
           "default": true
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -83,66 +78,62 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "chat_messages": {
+    "public.chat_messages": {
       "name": "chat_messages",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "project_id": {
           "name": "project_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "provider": {
           "name": "provider",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "role": {
           "name": "role",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "content": {
           "name": "content",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "metadata": {
           "name": "metadata",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -176,59 +167,57 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "chat_sessions": {
+    "public.chat_sessions": {
       "name": "chat_sessions",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "project_id": {
           "name": "project_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "title": {
           "name": "title",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "model": {
           "name": "model",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -262,90 +251,181 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "estimation_settings": {
-      "name": "estimation_settings",
+    "public.chat_templates": {
+      "name": "chat_templates",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "name": {
           "name": "name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "description": {
           "name": "description",
           "type": "text",
           "primaryKey": false,
+          "notNull": false
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "category": {
+          "name": "category",
+          "type": "text",
+          "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "'custom'"
         },
-        "complexity_weights": {
-          "name": "complexity_weights",
-          "type": "text",
+        "tags": {
+          "name": "tags",
+          "type": "json",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": false,
+          "default": "'[]'::json"
         },
-        "function_types": {
-          "name": "function_types",
-          "type": "text",
+        "is_public": {
+          "name": "is_public",
+          "type": "boolean",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": false,
+          "default": false
         },
-        "environmental_factors": {
-          "name": "environmental_factors",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "project_parameters": {
-          "name": "project_parameters",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "is_default": {
-          "name": "is_default",
+        "usage_count": {
+          "name": "usage_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "chat_templates_user_id_users_id_fk": {
+          "name": "chat_templates_user_id_users_id_fk",
+          "tableFrom": "chat_templates",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.estimation_settings": {
+      "name": "estimation_settings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "complexity_weights": {
+          "name": "complexity_weights",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "function_types": {
+          "name": "function_types",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environmental_factors": {
+          "name": "environmental_factors",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_parameters": {
+          "name": "project_parameters",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_default": {
+          "name": "is_default",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false,
           "default": false
         },
         "created_at": {
           "name": "created_at",
-          "type": "text",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "text",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "CURRENT_TIMESTAMP"
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -366,73 +446,68 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "file_uploads": {
+    "public.file_uploads": {
       "name": "file_uploads",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "project_id": {
           "name": "project_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "filename": {
           "name": "filename",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "original_name": {
           "name": "original_name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "mime_type": {
           "name": "mime_type",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "size": {
           "name": "size",
           "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "extracted_text": {
           "name": "extracted_text",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "upload_path": {
           "name": "upload_path",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -453,66 +528,62 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "generated_documents": {
+    "public.generated_documents": {
       "name": "generated_documents",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "project_id": {
           "name": "project_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "model": {
           "name": "model",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "document_type": {
           "name": "document_type",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "content": {
           "name": "content",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "tokens_used": {
           "name": "tokens_used",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "generation_time": {
           "name": "generation_time",
           "type": "real",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -533,66 +604,62 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "generated_plans": {
+    "public.generated_plans": {
       "name": "generated_plans",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "project_id": {
           "name": "project_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "model": {
           "name": "model",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "plan_type": {
           "name": "plan_type",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "content": {
           "name": "content",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "tokens_used": {
           "name": "tokens_used",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "generation_time": {
           "name": "generation_time",
           "type": "real",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -613,67 +680,149 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "projects": {
-      "name": "projects",
+    "public.github_settings": {
+      "name": "github_settings",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
+        },
+        "access_token": {
+          "name": "access_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "default_repo": {
+          "name": "default_repo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "default_branch": {
+          "name": "default_branch",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'main'"
+        },
+        "default_path": {
+          "name": "default_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'docs'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "github_settings_user_id_users_id_fk": {
+          "name": "github_settings_user_id_users_id_fk",
+          "tableFrom": "github_settings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.projects": {
+      "name": "projects",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
         },
         "title": {
           "name": "title",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "description": {
           "name": "description",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "requirements": {
           "name": "requirements",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "status": {
           "name": "status",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
           "default": "'draft'"
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -694,75 +843,71 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "prompt_builder_sessions": {
+    "public.prompt_builder_sessions": {
       "name": "prompt_builder_sessions",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "template_id": {
           "name": "template_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "project_description": {
           "name": "project_description",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "selected_features": {
           "name": "selected_features",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "custom_requirements": {
           "name": "custom_requirements",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "generated_prompt": {
           "name": "generated_prompt",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -796,161 +941,146 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "prompt_templates": {
+    "public.prompt_templates": {
       "name": "prompt_templates",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "user_id": {
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "name": {
           "name": "name",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "description": {
           "name": "description",
           "type": "text",
           "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
+          "notNull": false
         },
         "application_type": {
           "name": "application_type",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "category": {
           "name": "category",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "tags": {
           "name": "tags",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "guidelines": {
           "name": "guidelines",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "standards": {
           "name": "standards",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "libraries": {
           "name": "libraries",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "architecture": {
           "name": "architecture",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "security": {
           "name": "security",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "performance": {
           "name": "performance",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "best_practices": {
           "name": "best_practices",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "testing": {
           "name": "testing",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "deployment": {
           "name": "deployment",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "precautions": {
           "name": "precautions",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "custom_sections": {
           "name": "custom_sections",
-          "type": "text",
+          "type": "json",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false,
-          "default": "'[]'"
+          "default": "'[]'::json"
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
       "indexes": {},
@@ -971,84 +1101,86 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     },
-    "users": {
+    "public.users": {
       "name": "users",
+      "schema": "",
       "columns": {
         "id": {
           "name": "id",
           "type": "text",
           "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "username": {
           "name": "username",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "email": {
           "name": "email",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "password_hash": {
           "name": "password_hash",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
+          "notNull": true
         },
         "created_at": {
           "name": "created_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "integer",
+          "type": "timestamp",
           "primaryKey": false,
           "notNull": false,
-          "autoincrement": false
+          "default": "now()"
         }
       },
-      "indexes": {
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
         "users_username_unique": {
           "name": "users_username_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "username"
-          ],
-          "isUnique": true
+          ]
         },
         "users_email_unique": {
           "name": "users_email_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "email"
-          ],
-          "isUnique": true
+          ]
         }
       },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
-  "views": {},
   "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
   "_meta": {
+    "columns": {},
     "schemas": {},
-    "tables": {},
-    "columns": {}
-  },
-  "internal": {
-    "indexes": {}
+    "tables": {}
   }
 }

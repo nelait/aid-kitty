@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { db } from '../db';
-import { 
-  promptTemplates, 
-  promptBuilderSessions, 
-  PromptTemplate, 
+import {
+  promptTemplates,
+  promptBuilderSessions,
+  PromptTemplate,
   NewPromptTemplate,
   PromptBuilderSession,
-  NewPromptBuilderSession 
+  NewPromptBuilderSession
 } from '../../shared/schema';
 import { eq, desc, and, like, inArray } from 'drizzle-orm';
 import { authenticateToken } from '../auth';
@@ -18,13 +18,13 @@ const promptBuilderService = new PromptBuilderService();
 // Get all prompt templates with optional filtering
 router.get('/templates', authenticateToken, async (req, res) => {
   try {
-    const { 
-      applicationType, 
-      category, 
-      search, 
+    const {
+      applicationType,
+      category,
+      search,
       tags,
       limit = 50,
-      offset = 0 
+      offset = 0
     } = req.query;
 
     let query = db.select().from(promptTemplates);
@@ -71,7 +71,7 @@ router.get('/templates', authenticateToken, async (req, res) => {
 router.get('/templates/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const template = await db
       .select()
       .from(promptTemplates)
@@ -101,8 +101,8 @@ router.post('/templates', authenticateToken, async (req, res) => {
 
     // Validate required fields
     if (!templateData.name || !templateData.applicationType || !templateData.category) {
-      return res.status(400).json({ 
-        error: 'Missing required fields: name, applicationType, category' 
+      return res.status(400).json({
+        error: 'Missing required fields: name, applicationType, category'
       });
     }
 
@@ -195,7 +195,10 @@ router.post('/generate', authenticateToken, async (req, res) => {
       templateId,
       projectDescription,
       selectedFeatures = [],
-      customRequirements = []
+      customRequirements = [],
+      projectId,
+      selectedDocumentIds,
+      docsPath
     } = req.body;
 
     if (!templateId || !projectDescription) {
@@ -215,12 +218,35 @@ router.post('/generate', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Template not found' });
     }
 
+    // Fetch attached documents if a project is selected
+    let attachedDocuments: { documentType: string; content: string }[] = [];
+    if (projectId) {
+      const { generatedDocuments } = await import('../../shared/schema');
+      const allDocs = await db
+        .select({
+          id: generatedDocuments.id,
+          documentType: generatedDocuments.documentType,
+          content: generatedDocuments.content,
+        })
+        .from(generatedDocuments)
+        .where(eq(generatedDocuments.projectId, projectId));
+
+      // Filter by selected IDs if provided, otherwise include all
+      if (selectedDocumentIds && selectedDocumentIds.length > 0) {
+        attachedDocuments = allDocs.filter(d => selectedDocumentIds.includes(d.id));
+      } else {
+        attachedDocuments = allDocs;
+      }
+    }
+
     // Generate the prompt
     const generatedPrompt = promptBuilderService.generatePrompt(
       template[0],
       projectDescription,
       selectedFeatures,
-      customRequirements
+      customRequirements,
+      attachedDocuments.length > 0 ? attachedDocuments : undefined,
+      docsPath
     );
 
     // Save the session
@@ -323,6 +349,45 @@ router.get('/sessions/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// Update a prompt session's generated prompt
+router.put('/sessions/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { generatedPrompt } = req.body;
+
+    if (!generatedPrompt) {
+      return res.status(400).json({ error: 'generatedPrompt is required' });
+    }
+
+    // Check if session exists and belongs to user
+    const existingSession = await db
+      .select()
+      .from(promptBuilderSessions)
+      .where(
+        and(
+          eq(promptBuilderSessions.id, id),
+          eq(promptBuilderSessions.userId, req.user.id)
+        )
+      )
+      .limit(1);
+
+    if (existingSession.length === 0) {
+      return res.status(404).json({ error: 'Session not found or access denied' });
+    }
+
+    const [updatedSession] = await db
+      .update(promptBuilderSessions)
+      .set({ generatedPrompt, updatedAt: new Date() })
+      .where(eq(promptBuilderSessions.id, id))
+      .returning();
+
+    res.json(updatedSession);
+  } catch (error) {
+    console.error('Error updating prompt session:', error);
+    res.status(500).json({ error: 'Failed to update prompt session' });
+  }
+});
+
 // Delete a prompt session
 router.delete('/sessions/:id', authenticateToken, async (req, res) => {
   try {
@@ -359,12 +424,12 @@ router.delete('/sessions/:id', authenticateToken, async (req, res) => {
 router.get('/metadata', authenticateToken, async (req, res) => {
   try {
     const applicationTypes = [
-      'web', 'mobile', 'rag', 'api', 'desktop', 'ml', 'blockchain', 
+      'web', 'mobile', 'rag', 'api', 'desktop', 'ml', 'blockchain',
       'iot', 'game', 'cli', 'microservice', 'chrome-extension', 'electron', 'pwa'
     ];
 
     const categories = [
-      'frontend', 'backend', 'fullstack', 'ai', 'data', 
+      'frontend', 'backend', 'fullstack', 'ai', 'data',
       'devops', 'security', 'testing', 'infrastructure'
     ];
 

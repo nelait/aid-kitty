@@ -5,6 +5,7 @@ import { AuthProvider } from '@/lib/auth-context';
 import Layout from '@/components/Layout';
 import Navbar from '@/components/Navbar';
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/toaster";
 import HomePage from '@/pages/HomePage';
 import LoginPage from '@/pages/LoginPage';
 import RegisterPage from '@/pages/RegisterPage';
@@ -59,6 +60,7 @@ function App() {
             </Layout>
           </Router>
         </TooltipProvider>
+        <Toaster />
       </AuthProvider>
     </QueryClientProvider>
   );

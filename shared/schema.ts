@@ -1,45 +1,45 @@
-import { sqliteTable, text, integer, real, blob } from 'drizzle-orm/sqlite-core';
+import { pgTable, text, integer, real, boolean, timestamp, json } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 // Users table
-export const users = sqliteTable('users', {
+export const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   username: text('username').notNull().unique(),
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Projects table
-export const projects = sqliteTable('projects', {
+export const projects = pgTable('projects', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   description: text('description'),
   requirements: text('requirements'), // Original requirements text
   status: text('status', { enum: ['draft', 'processing', 'completed', 'failed'] }).default('draft'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Generated plans table
-export const generatedPlans = sqliteTable('generated_plans', {
+export const generatedPlans = pgTable('generated_plans', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   model: text('model').notNull(), // openai, anthropic, google, deepseek
-  planType: text('plan_type', { 
-    enum: ['executive_summary', 'technical_spec', 'architecture', 'implementation', 'full_mvp'] 
+  planType: text('plan_type', {
+    enum: ['executive_summary', 'technical_spec', 'architecture', 'implementation', 'full_mvp']
   }).notNull(),
   content: text('content').notNull(),
   tokensUsed: integer('tokens_used'),
   generationTime: real('generation_time'), // in seconds
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 // File uploads table
-export const fileUploads = sqliteTable('file_uploads', {
+export const fileUploads = pgTable('file_uploads', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   filename: text('filename').notNull(),
@@ -48,34 +48,34 @@ export const fileUploads = sqliteTable('file_uploads', {
   size: integer('size').notNull(),
   extractedText: text('extracted_text'), // For PDF text extraction
   uploadPath: text('upload_path').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 // API keys table (encrypted storage)
-export const apiKeys = sqliteTable('api_keys', {
+export const apiKeys = pgTable('api_keys', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   provider: text('provider').notNull(), // 'openai', 'anthropic', 'google', 'deepseek'
   key: text('key').notNull(),
   name: text('name'), // User-friendly name for the key
-  isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Chat sessions table
-export const chatSessions = sqliteTable('chat_sessions', {
+export const chatSessions = pgTable('chat_sessions', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   projectId: text('project_id').references(() => projects.id, { onDelete: 'cascade' }),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   model: text('model').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Chat messages table
-export const chatMessages = sqliteTable('chat_messages', {
+export const chatMessages = pgTable('chat_messages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   projectId: text('project_id').references(() => projects.id),
@@ -83,11 +83,11 @@ export const chatMessages = sqliteTable('chat_messages', {
   role: text('role').notNull(), // 'user' | 'assistant' | 'system'
   content: text('content').notNull(),
   metadata: text('metadata'), // JSON string for additional data
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 // Chat templates table
-export const chatTemplates = sqliteTable('chat_templates', {
+export const chatTemplates = pgTable('chat_templates', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
@@ -96,51 +96,89 @@ export const chatTemplates = sqliteTable('chat_templates', {
   category: text('category', {
     enum: ['coaching', 'brainstorming', 'technical', 'business', 'analysis', 'custom']
   }).default('custom'),
-  tags: text('tags', { mode: 'json' }).$type<string[]>().default([]),
-  isPublic: integer('is_public', { mode: 'boolean' }).default(false),
+  tags: json('tags').$type<string[]>().default([]),
+  isPublic: boolean('is_public').default(false),
   usageCount: integer('usage_count').default(0),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Generated documents table
-export const generatedDocuments = sqliteTable('generated_documents', {
+export const generatedDocuments = pgTable('generated_documents', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   model: text('model').notNull(), // openai, anthropic, google, deepseek
-  documentType: text('document_type', { 
-    enum: ['prd', 'requirements', 'techstack', 'frontend', 'backend', 'flow', 'status'] 
+  documentType: text('document_type', {
+    enum: ['prd', 'requirements', 'techstack', 'frontend', 'backend', 'flow', 'status']
   }).notNull(),
   content: text('content').notNull(),
   tokensUsed: integer('tokens_used'),
   generationTime: real('generation_time'), // in seconds
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// GitHub settings table
+export const githubSettings = pgTable('github_settings', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  accessToken: text('access_token').notNull(), // Personal Access Token
+  username: text('username'), // GitHub username
+  defaultRepo: text('default_repo'), // owner/repo format
+  defaultBranch: text('default_branch').default('main'),
+  defaultPath: text('default_path').default('docs'), // Default folder path for documents
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// OpenHands settings table
+export const openhandsSettings = pgTable('openhands_settings', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  apiKey: text('api_key').notNull(), // OpenHands Cloud API key
+  defaultRepo: text('default_repo'), // owner/repo format
+  defaultBranch: text('default_branch').default('main'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// OpenHands builds table (tracks conversations/builds)
+export const openhandsBuilds = pgTable('openhands_builds', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id'), // Reference to prompt builder session
+  conversationId: text('conversation_id').notNull(), // OpenHands conversation ID
+  repository: text('repository').notNull(), // owner/repo
+  prompt: text('prompt').notNull(), // The prompt that was sent
+  status: text('status', { enum: ['started', 'running', 'completed', 'failed', 'unknown'] }).default('started'),
+  conversationUrl: text('conversation_url'), // Link to OpenHands Cloud
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Estimation settings table
-export const estimationSettings = sqliteTable('estimation_settings', {
+export const estimationSettings = pgTable('estimation_settings', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
   description: text('description'),
-  
+
   // Function Point Analysis Configuration
-  complexityWeights: text('complexity_weights', { mode: 'json' }).$type<{
+  complexityWeights: json('complexity_weights').$type<{
     simple: number;
     average: number;
     complex: number;
   }>().notNull(),
-  
-  functionTypes: text('function_types', { mode: 'json' }).$type<{
+
+  functionTypes: json('function_types').$type<{
     externalInputs: { simple: number; average: number; complex: number };
     externalOutputs: { simple: number; average: number; complex: number };
     externalInquiries: { simple: number; average: number; complex: number };
     internalLogicalFiles: { simple: number; average: number; complex: number };
     externalInterfaceFiles: { simple: number; average: number; complex: number };
   }>().notNull(),
-  
+
   // Environmental Factors (0-5 scale)
-  environmentalFactors: text('environmental_factors', { mode: 'json' }).$type<{
+  environmentalFactors: json('environmental_factors').$type<{
     dataCommunications: number;
     distributedDataProcessing: number;
     performance: number;
@@ -156,23 +194,23 @@ export const estimationSettings = sqliteTable('estimation_settings', {
     multipleSites: number;
     facilitateChange: number;
   }>().notNull(),
-  
+
   // Project Parameters
-  projectParameters: text('project_parameters', { mode: 'json' }).$type<{
+  projectParameters: json('project_parameters').$type<{
     teamProductivity: number; // Function Points per person-day
     bufferPercentage: number; // Risk buffer (%)
     hourlyRate: number; // Cost per hour
     hoursPerDay: number; // Working hours per day
     workingDaysPerMonth: number; // Working days per month
   }>().notNull(),
-  
-  isDefault: integer('is_default', { mode: 'boolean' }).default(false),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
-  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`)
+
+  isDefault: boolean('is_default').default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Prompt Builder tables
-export const promptTemplates = sqliteTable('prompt_templates', {
+export const promptTemplates = pgTable('prompt_templates', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
@@ -183,35 +221,35 @@ export const promptTemplates = sqliteTable('prompt_templates', {
   category: text('category', {
     enum: ['frontend', 'backend', 'fullstack', 'ai', 'data', 'devops', 'security', 'testing', 'infrastructure']
   }).notNull(),
-  tags: text('tags', { mode: 'json' }).$type<string[]>().default([]),
-  
+  tags: json('tags').$type<string[]>().default([]),
+
   // Detailed configuration as JSON
-  guidelines: text('guidelines', { mode: 'json' }).$type<GuidelineItem[]>().default([]),
-  standards: text('standards', { mode: 'json' }).$type<StandardItem[]>().default([]),
-  libraries: text('libraries', { mode: 'json' }).$type<LibraryItem[]>().default([]),
-  architecture: text('architecture', { mode: 'json' }).$type<ArchitectureGuidelines>().notNull(),
-  security: text('security', { mode: 'json' }).$type<SecurityItem[]>().default([]),
-  performance: text('performance', { mode: 'json' }).$type<PerformanceItem[]>().default([]),
-  bestPractices: text('best_practices', { mode: 'json' }).$type<BestPracticeItem[]>().default([]),
-  testing: text('testing', { mode: 'json' }).$type<TestingItem[]>().default([]),
-  deployment: text('deployment', { mode: 'json' }).$type<DeploymentItem[]>().default([]),
-  precautions: text('precautions', { mode: 'json' }).$type<PrecautionItem[]>().default([]),
-  customSections: text('custom_sections', { mode: 'json' }).$type<CustomSection[]>().default([]),
-  
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  guidelines: json('guidelines').$type<GuidelineItem[]>().default([]),
+  standards: json('standards').$type<StandardItem[]>().default([]),
+  libraries: json('libraries').$type<LibraryItem[]>().default([]),
+  architecture: json('architecture').$type<ArchitectureGuidelines>().notNull(),
+  security: json('security').$type<SecurityItem[]>().default([]),
+  performance: json('performance').$type<PerformanceItem[]>().default([]),
+  bestPractices: json('best_practices').$type<BestPracticeItem[]>().default([]),
+  testing: json('testing').$type<TestingItem[]>().default([]),
+  deployment: json('deployment').$type<DeploymentItem[]>().default([]),
+  precautions: json('precautions').$type<PrecautionItem[]>().default([]),
+  customSections: json('custom_sections').$type<CustomSection[]>().default([]),
+
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-export const promptBuilderSessions = sqliteTable('prompt_builder_sessions', {
+export const promptBuilderSessions = pgTable('prompt_builder_sessions', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   templateId: text('template_id').notNull().references(() => promptTemplates.id, { onDelete: 'cascade' }),
   projectDescription: text('project_description').notNull(),
-  selectedFeatures: text('selected_features', { mode: 'json' }).$type<string[]>().default([]),
-  customRequirements: text('custom_requirements', { mode: 'json' }).$type<string[]>().default([]),
+  selectedFeatures: json('selected_features').$type<string[]>().default([]),
+  customRequirements: json('custom_requirements').$type<string[]>().default([]),
   generatedPrompt: text('generated_prompt').notNull(),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
-  updatedAt: integer('updated_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 // Export types

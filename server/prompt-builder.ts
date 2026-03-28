@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
-import { 
-  PromptTemplate, 
-  NewPromptTemplate, 
-  PromptBuilderSession, 
+import {
+  PromptTemplate,
+  NewPromptTemplate,
+  PromptBuilderSession,
   NewPromptBuilderSession,
   ApplicationType,
   ApplicationCategory,
@@ -20,11 +20,18 @@ import {
 } from '../shared/schema';
 
 export class PromptBuilderService {
-  
+
   /**
    * Generate a comprehensive coding prompt based on template and requirements
    */
-  generatePrompt(template: PromptTemplate, projectDescription: string, selectedFeatures: string[], customRequirements?: string[]): string {
+  generatePrompt(
+    template: PromptTemplate,
+    projectDescription: string,
+    selectedFeatures: string[],
+    customRequirements?: string[],
+    attachedDocuments?: { documentType: string; content: string }[],
+    docsPath?: string
+  ): string {
     const sections: string[] = [];
 
     // Header
@@ -32,6 +39,11 @@ export class PromptBuilderService {
 
     // Project Overview
     sections.push(this.generateProjectOverview(projectDescription, selectedFeatures));
+
+    // Project Reference Documents (hybrid: inline summary + file path)
+    if (attachedDocuments && attachedDocuments.length > 0) {
+      sections.push(this.generateDocumentsSection(attachedDocuments, docsPath || 'docs'));
+    }
 
     // Architecture Guidelines
     sections.push(this.generateArchitectureSection(template.architecture));
@@ -82,6 +94,43 @@ export class PromptBuilderService {
     return sections.join('\n\n');
   }
 
+  /**
+   * Generate a "Project Reference Documents" section with inline summaries + file path references
+   */
+  private generateDocumentsSection(
+    documents: { documentType: string; content: string }[],
+    docsPath: string
+  ): string {
+    const docTypeLabels: Record<string, string> = {
+      prd: 'Product Requirements Document (PRD)',
+      requirements: 'Requirements Specification',
+      techstack: 'Technology Stack & Architecture',
+      frontend: 'Frontend Implementation Guide',
+      backend: 'Backend Implementation Guide',
+      flow: 'Application Flow & User Journeys',
+      status: 'Project Status & Progress',
+    };
+
+    const docSections = documents.map(doc => {
+      const label = docTypeLabels[doc.documentType] || doc.documentType;
+      const fileName = `${doc.documentType}.md`;
+
+      // Extract a summary: first ~500 chars, trimmed to last complete sentence/line
+      let summary = doc.content.substring(0, 500);
+      const lastNewline = summary.lastIndexOf('\n');
+      if (lastNewline > 200) {
+        summary = summary.substring(0, lastNewline);
+      }
+      if (summary.length < doc.content.length) {
+        summary += '\n...';
+      }
+
+      return `### ${label}\n\n${summary}\n\n📄 **Full document**: @${docsPath}/${fileName}`;
+    });
+
+    return `## 📋 Project Reference Documents\n\n> **Note for AI coding tools**: Read the full documents referenced below for complete context before implementing.\n\n${docSections.join('\n\n---\n\n')}`;
+  }
+
   private generateHeader(template: PromptTemplate, projectDescription: string): string {
     return `# ${template.applicationType.toUpperCase()} Application Development Prompt
 
@@ -109,17 +158,47 @@ ${selectedFeatures.map(feature => `- ${feature}`).join('\n')}
   }
 
   private generateArchitectureSection(architecture: ArchitectureGuidelines): string {
+    // Helper to format a value that might be array, string, or object
+    const formatValue = (value: any, defaultMsg: string): string => {
+      if (!value) return defaultMsg;
+      if (Array.isArray(value)) {
+        return value.map(item => `- ${item}`).join('\n');
+      }
+      if (typeof value === 'string') {
+        return `- ${value}`;
+      }
+      if (typeof value === 'object') {
+        return Object.entries(value).map(([k, v]) => {
+          if (Array.isArray(v)) {
+            return `- **${k}**: ${v.join(', ')}`;
+          }
+          return `- **${k}**: ${v}`;
+        }).join('\n');
+      }
+      return defaultMsg;
+    };
+
     return `## 🏗️ Architecture Guidelines
 
-**Patterns**:
-${architecture.patterns?.map(pattern => `- ${pattern}`).join('\n') || 'No patterns specified'}
+**Pattern**:
+${formatValue(architecture.pattern, 'No pattern specified')}
+
+**Description**:
+${formatValue(architecture.description, 'No description specified')}
+
+**Structure**:
+${formatValue(architecture.structure, 'No structure specified')}
 
 **Data Flow**:
-${architecture.dataFlow?.map(flow => `- ${flow}`).join('\n') || 'No data flow specified'}
+${formatValue(architecture.dataFlow, 'No data flow specified')}
 
-**Routing**:
-${architecture.routing?.map(route => `- ${route}`).join('\n') || 'No routing specified'}`;
+**State Management**:
+${formatValue(architecture.stateManagement, 'No state management specified')}
+
+**API Design**:
+${formatValue(architecture.apiDesign, 'No API design specified')}`;
   }
+
 
   private generateGuidelinesSection(guidelines: any): string {
     let section = `## 📋 Development Guidelines
@@ -295,28 +374,28 @@ ${practice.description}
     let section = `## 🧪 Testing Guidelines
   
   `;
-  
+
     if (testing.unit) {
       section += `### Unit Testing
   ${testing.unit.map((item: string) => `- ${item}`).join('\n')}
   
   `;
     }
-  
+
     if (testing.integration) {
       section += `### Integration Testing
   ${testing.integration.map((item: string) => `- ${item}`).join('\n')}
   
   `;
     }
-  
+
     if (testing.e2e) {
       section += `### End-to-End Testing
   ${testing.e2e.map((item: string) => `- ${item}`).join('\n')}
   
   `;
     }
-  
+
     return section;
   }
 
@@ -324,28 +403,28 @@ ${practice.description}
     let section = `## 🚀 Deployment Guidelines
   
   `;
-  
+
     if (deployment.build) {
       section += `### Build Configuration
   ${deployment.build.map((item: string) => `- ${item}`).join('\n')}
   
   `;
     }
-  
+
     if (deployment.hosting) {
       section += `### Hosting Setup
   ${deployment.hosting.map((item: string) => `- ${item}`).join('\n')}
   
   `;
     }
-  
+
     if (deployment.cicd) {
       section += `### CI/CD Pipeline
   ${deployment.cicd.map((item: string) => `- ${item}`).join('\n')}
   
   `;
     }
-  
+
     return section;
   }
 
@@ -386,12 +465,12 @@ ${customRequirements.map(req => `- ${req}`).join('\n')}`;
 
   private generateCustomSections(customSections: CustomSection[]): string {
     const sortedSections = customSections.sort((a, b) => a.order - b.order);
-    
+
     let section = `## 📝 Additional Guidelines`;
 
     sortedSections.forEach(custom => {
       section += `\n\n### ${custom.title}`;
-      
+
       switch (custom.type) {
         case 'list':
           const items = custom.content.split('\n').filter(item => item.trim());
@@ -414,7 +493,7 @@ ${customRequirements.map(req => `- ${req}`).join('\n')}`;
 
   private generateImplementationInstructions(applicationType: ApplicationType): string {
     const instructions = this.getImplementationInstructions(applicationType);
-    
+
     return `## 🛠️ Implementation Instructions
 
 ${instructions}
@@ -542,7 +621,7 @@ ${instructions}
       'electron': 'Create Electron application with proper main/renderer process communication and native integration.',
       'pwa': 'Build Progressive Web App with service workers, offline functionality, and app-like experience.'
     };
-    
+
     return instructionsMap[applicationType] || 'Follow the guidelines above to implement your application.';
   }
 }

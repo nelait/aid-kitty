@@ -5,10 +5,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { documentsAPI, estimationSettingsAPI } from '@/lib/api';
-import { 
-  FileText, 
-  Loader2, 
-  Download, 
+import {
+  FileText,
+  Loader2,
+  Download,
   CheckCircle,
   AlertCircle,
   Sparkles,
@@ -26,7 +26,7 @@ interface DocumentGeneratorProps {
   onDocumentsGenerated?: (documents: any[]) => void;
 }
 
-type DocumentType = 'prd' | 'requirements' | 'techstack' | 'frontend' | 'backend' | 'flow' | 'status' | 'estimation';
+type DocumentType = 'prd' | 'requirements' | 'techstack' | 'frontend' | 'backend' | 'flow' | 'status' | 'estimation' | 'diagram_component' | 'diagram_sequence' | 'diagram_architecture';
 
 interface DocumentTypeInfo {
   id: DocumentType;
@@ -99,15 +99,36 @@ const documentTypes: DocumentTypeInfo[] = [
     description: 'Work breakdown structure with time and resource estimates',
     icon: <Clock className="w-4 h-4" />,
     complexity: 'complex'
+  },
+  {
+    id: 'diagram_component',
+    name: 'Component Diagram',
+    description: 'Visual component architecture using Mermaid.js',
+    icon: <Sparkles className="w-4 h-4" />,
+    complexity: 'simple'
+  },
+  {
+    id: 'diagram_sequence',
+    name: 'Sequence Diagrams',
+    description: 'User flow and interaction diagrams using Mermaid.js',
+    icon: <Sparkles className="w-4 h-4" />,
+    complexity: 'simple'
+  },
+  {
+    id: 'diagram_architecture',
+    name: 'Architecture Diagram',
+    description: 'System architecture visualization using Mermaid.js',
+    icon: <Sparkles className="w-4 h-4" />,
+    complexity: 'simple'
   }
 ];
 
-export default function DocumentGenerator({ 
-  projectId, 
-  projectTitle, 
-  requirements, 
-  provider, 
-  onDocumentsGenerated 
+export default function DocumentGenerator({
+  projectId,
+  projectTitle,
+  requirements,
+  provider,
+  onDocumentsGenerated
 }: DocumentGeneratorProps) {
   const [selectedDocuments, setSelectedDocuments] = useState<Set<DocumentType>>(new Set());
   const [generating, setGenerating] = useState(false);
@@ -128,7 +149,7 @@ export default function DocumentGenerator({
       setLoadingSettings(true);
       const response = await estimationSettingsAPI.list();
       setEstimationSettings(response.data.settings);
-      
+
       // Auto-select default setting if available
       const defaultSetting = response.data.settings.find((s: EstimationSetting) => s.isDefault);
       if (defaultSetting) {
@@ -142,7 +163,7 @@ export default function DocumentGenerator({
   };
 
   const handleDocumentToggle = (documentType: DocumentType) => {
-    setSelectedDocuments(prev => 
+    setSelectedDocuments(prev =>
       prev.has(documentType)
         ? new Set([...prev].filter(type => type !== documentType))
         : new Set([...prev, documentType])
@@ -180,7 +201,7 @@ export default function DocumentGenerator({
     try {
       setGenerating(true);
       const documentTypesArray = Array.from(selectedDocuments);
-      
+
       const response = await documentsAPI.generateBatch({
         projectId,
         requirements,
@@ -192,7 +213,7 @@ export default function DocumentGenerator({
 
       setGeneratedDocuments(response.documents);
       onDocumentsGenerated?.(response.documents);
-      
+
       toast({
         title: "Documents generated successfully",
         description: `Generated ${documentTypesArray.length} document${documentTypesArray.length > 1 ? 's' : ''}.`,
@@ -252,17 +273,16 @@ export default function DocumentGenerator({
                 </Button>
               </div>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {documentTypes.map((docType) => {
                 const isSelected = selectedDocuments.has(docType.id);
-                
+
                 return (
-                  <Card 
+                  <Card
                     key={docType.id}
-                    className={`cursor-pointer transition-all ${
-                      isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:shadow-md'
-                    }`}
+                    className={`cursor-pointer transition-all ${isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : 'hover:shadow-md'
+                      }`}
                     onClick={() => handleDocumentToggle(docType.id)}
                   >
                     <CardContent className="p-4">
@@ -277,11 +297,10 @@ export default function DocumentGenerator({
                           <div className="flex items-center gap-2 mb-1">
                             {docType.icon}
                             <h4 className="font-medium text-sm">{docType.name}</h4>
-                            <span className={`px-2 py-1 text-xs rounded-full ${
-                              docType.complexity === 'complex' 
-                                ? 'bg-orange-100 text-orange-800' 
+                            <span className={`px-2 py-1 text-xs rounded-full ${docType.complexity === 'complex'
+                                ? 'bg-orange-100 text-orange-800'
                                 : 'bg-green-100 text-green-800'
-                            }`}>
+                              }`}>
                               {docType.complexity}
                             </span>
                           </div>
@@ -336,7 +355,7 @@ export default function DocumentGenerator({
                     </Select>
                     {estimationSettings.length === 0 && !loadingSettings && (
                       <p className="text-sm text-gray-600 mt-2">
-                        No estimation settings found. 
+                        No estimation settings found.
                         <a href="/estimation-settings" className="text-blue-600 hover:underline ml-1">
                           Create one first
                         </a>
@@ -353,7 +372,7 @@ export default function DocumentGenerator({
             <div className="text-sm text-gray-600">
               {selectedDocuments.size} document{selectedDocuments.size !== 1 ? 's' : ''}
             </div>
-            <Button 
+            <Button
               onClick={generateDocuments}
               disabled={selectedDocuments.size === 0 || generating}
               className="flex items-center gap-2"
@@ -445,8 +464,8 @@ export default function DocumentGenerator({
                   <Download className="w-3 h-3" />
                   Download
                 </Button>
-                <Button 
-                  variant="outline" 
+                <Button
+                  variant="outline"
                   size="sm"
                   onClick={() => setShowPreviewModal(false)}
                 >
@@ -455,9 +474,9 @@ export default function DocumentGenerator({
               </div>
             </div>
             <div className="flex-1 overflow-auto p-0">
-              <div 
+              <div
                 className="w-full h-full"
-                dangerouslySetInnerHTML={{ __html: previewDocument?.content || '' }} 
+                dangerouslySetInnerHTML={{ __html: previewDocument?.content || '' }}
               />
             </div>
           </div>

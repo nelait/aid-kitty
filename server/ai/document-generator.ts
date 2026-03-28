@@ -1,37 +1,40 @@
 import { AIProviderFactory, GenerationResult } from './providers';
 
 export interface DocumentGenerationRequest {
-  requirements: string;
-  projectTitle: string;
-  documentType: DocumentType;
-  provider: string;
-  estimationSettings?: any;
+    requirements: string;
+    projectTitle: string;
+    documentType: DocumentType;
+    provider: string;
+    estimationSettings?: any;
 }
 
-export type DocumentType = 
-  | 'prd' 
-  | 'requirements' 
-  | 'techstack' 
-  | 'frontend' 
-  | 'backend' 
-  | 'flow' 
-  | 'status'
-  | 'estimation';
+export type DocumentType =
+    | 'prd'
+    | 'requirements'
+    | 'techstack'
+    | 'frontend'
+    | 'backend'
+    | 'flow'
+    | 'status'
+    | 'estimation'
+    | 'diagram_component'
+    | 'diagram_sequence'
+    | 'diagram_architecture';
 
 export interface GeneratedDocument {
-  filename: string;
-  content: string;
-  type: DocumentType;
+    filename: string;
+    content: string;
+    type: DocumentType;
 }
 
 export class DocumentGenerator {
-  constructor(private aiFactory: AIProviderFactory) {}
+    constructor(private aiFactory: AIProviderFactory) { }
 
-  private buildPrompt(documentType: DocumentType, requirements: string, projectTitle: string, estimationSettings?: any): string {
-    const baseContext = `Project: ${projectTitle}\n\nRequirements:\n${requirements}\n\n`;
+    private buildPrompt(documentType: DocumentType, requirements: string, projectTitle: string, estimationSettings?: any): string {
+        const baseContext = `Project: ${projectTitle}\n\nRequirements:\n${requirements}\n\n`;
 
-    const prompts: Record<DocumentType, string> = {
-      prd: `${baseContext}You are a Product Manager creating a detailed PRD for this project.
+        const prompts: Record<DocumentType, string> = {
+            prd: `${baseContext}You are a Product Manager creating a detailed PRD for this project.
 
 Create a detailed PRD that ONLY addresses what's described above. Format as markdown with these sections:
 1. Introduction - Describe exactly what was requested
@@ -41,7 +44,7 @@ Create a detailed PRD that ONLY addresses what's described above. Format as mark
 
 Be specific and detailed but practical. Focus on information developers need to implement the product.`,
 
-      requirements: `${baseContext}You are a Senior Business Analyst creating a detailed requirements document for this project.
+            requirements: `${baseContext}You are a Senior Business Analyst creating a detailed requirements document for this project.
 
 Create a detailed requirements document that ONLY addresses what's described above. Format as markdown with these sections:
 1. Project Overview - Describe exactly what was requested
@@ -51,7 +54,7 @@ Create a detailed requirements document that ONLY addresses what's described abo
 
 Be specific and detailed but concise. Focus on clarity and actionable information.`,
 
-      techstack: `${baseContext}You are a Software Architect recommending technology choices for this project.
+            techstack: `${baseContext}You are a Software Architect recommending technology choices for this project.
 
 Recommend appropriate technologies that would work well for this specific project. Format as markdown with these sections:
 1. Frontend Technologies - Appropriate for the described UI needs
@@ -61,7 +64,7 @@ Recommend appropriate technologies that would work well for this specific projec
 
 Focus on practical, maintainable choices that align with current best practices. Include brief justifications for major technology decisions.`,
 
-      backend: `${baseContext}You are a Backend Engineer designing an implementation guide for this project.
+            backend: `${baseContext}You are a Backend Engineer designing an implementation guide for this project.
 
 Create a practical backend implementation plan in markdown format with these sections:
 1. Document Header - Include "Version: 1.0" and "Date: ${new Date().toLocaleDateString()}"
@@ -74,7 +77,7 @@ Create a practical backend implementation plan in markdown format with these sec
 
 Focus on providing clear, usable guidance. Include practical code examples for the most important functionality.`,
 
-      frontend: `${baseContext}You are a Frontend Developer creating an implementation guide for this project.
+            frontend: `${baseContext}You are a Frontend Developer creating an implementation guide for this project.
 
 Create a detailed frontend implementation guide specifically for this project. Format as markdown with these sections:
 1. Component Structure - UI components needed for the described features
@@ -84,7 +87,7 @@ Create a detailed frontend implementation guide specifically for this project. F
 
 Focus on providing actionable guidance with practical code examples for the most important components.`,
 
-      flow: `${baseContext}You are a Solutions Architect creating flow documentation for this project.
+            flow: `${baseContext}You are a Solutions Architect creating flow documentation for this project.
 
 Create system flow documentation specifically for this project. Format as markdown with these sections:
 1. User Workflows - How users will interact with the system
@@ -95,7 +98,7 @@ Create system flow documentation specifically for this project. Format as markdo
 Include simple mermaid diagrams for the most critical flows (user journeys and data flows).
 Focus on clarity and practical information that guides development.`,
 
-      status: `${baseContext}You are a Project Manager creating a project status template for this project.
+            status: `${baseContext}You are a Project Manager creating a project status template for this project.
 
 Create a project status tracking template specifically for this project. Format as markdown with these sections:
 1. Implementation Phases - Based on the specific features mentioned
@@ -105,7 +108,7 @@ Create a project status tracking template specifically for this project. Format 
 
 Focus on creating a practical tracking template that can be used throughout development.`,
 
-      estimation: `${baseContext}You are a Senior Project Estimator creating a detailed Function Point Analysis (FPA) estimation for this project.
+            estimation: `${baseContext}You are a Senior Project Estimator creating a detailed Function Point Analysis (FPA) estimation for this project.
 
 Create a comprehensive project estimation document using Function Point Analysis methodology. Output as a complete HTML document that will render as a professional webpage:
 
@@ -649,138 +652,147 @@ Create a comprehensive project estimation document using Function Point Analysis
 
 **IMPORTANT CALCULATION INSTRUCTIONS:**
 Analyze the project requirements thoroughly and calculate ACTUAL numeric values for all placeholders marked with [Calculate...]. Do not leave any placeholders unfilled. Use the estimation settings provided and apply Function Point Analysis methodology to generate realistic, actionable numbers based on the project scope and complexity.`,
-    };
 
-    return prompts[documentType];
-  }
+            diagram_component: `${baseContext}You are a Software Architect creating a Component Diagram. Create a Mermaid.js flowchart TB diagram showing system components grouped by layer (Frontend, Backend, Data, External) with relationships. Output a markdown file with a mermaid code block. Use subgraph for layers and arrows for dependencies. Generate based on the actual requirements.`,
 
-  private getDocumentFilename(documentType: DocumentType): string {
-    const filenames: Record<DocumentType, string> = {
-      prd: 'prd.md',
-      requirements: 'requirements.md',
-      techstack: 'techstack.md',
-      backend: 'backend.md',
-      frontend: 'frontend.md',
-      flow: 'flow.md',
-      status: 'status.md',
-      estimation: 'estimation.html'
-    };
+            diagram_sequence: `${baseContext}You are a Software Architect creating Sequence Diagrams. Create Mermaid.js sequenceDiagram(s) showing 3-5 key user flows including authentication, data operations, and main features. Output a markdown file with mermaid code blocks for each flow. Use actors, participants, and proper arrow syntax (->> and -->>). Generate based on the actual requirements.`,
 
-    return filenames[documentType];
-  }
+            diagram_architecture: `${baseContext}You are a Solutions Architect creating an Architecture Diagram. Create a Mermaid.js flowchart TB showing the high-level system architecture with layers, technology choices, external integrations, and data storage. Use subgraphs, descriptive labels, and show connections between components. Output a markdown file with a mermaid code block. Generate based on the actual requirements.`,
+        };
 
-  async generateDocument(request: {
-    requirements: string;
-    projectTitle: string;
-    documentType: DocumentType;
-    provider: string;
-    estimationSettings?: any;
-  }): Promise<GeneratedDocument> {
-    const prompt = this.buildPrompt(
-      request.documentType,
-      request.requirements,
-      request.projectTitle,
-      request.estimationSettings
-    );
-
-    // Use longer timeouts and more tokens for complex documents
-    const isComplexDocument = ['backend', 'frontend', 'techstack', 'estimation'].includes(request.documentType);
-    const options = {
-      maxTokens: isComplexDocument ? 8192 : 4096,
-      temperature: 0.7,
-    };
-
-    const result = await this.aiFactory.generateWithProvider(
-      request.provider,
-      prompt,
-      options
-    );
-
-    // Validate content quality
-    if (!result.content || result.content.trim().length < 100) {
-      throw new Error(`Failed to generate meaningful content for ${request.documentType}`);
+        return prompts[documentType];
     }
 
-    // Check for placeholder content that indicates failure
-    if (result.content.includes("Please provide the requirements") || 
-        result.content.includes("I need more information")) {
-      throw new Error(`Generated content for ${request.documentType} is incomplete`);
+    private getDocumentFilename(documentType: DocumentType): string {
+        const filenames: Record<DocumentType, string> = {
+            prd: 'prd.md',
+            requirements: 'requirements.md',
+            techstack: 'techstack.md',
+            backend: 'backend.md',
+            frontend: 'frontend.md',
+            flow: 'flow.md',
+            status: 'status.md',
+            estimation: 'estimation.html',
+            diagram_component: 'diagram_component.md',
+            diagram_sequence: 'diagram_sequence.md',
+            diagram_architecture: 'diagram_architecture.md'
+        };
+
+        return filenames[documentType];
     }
 
-    return {
-      filename: this.getDocumentFilename(request.documentType),
-      content: result.content,
-      type: request.documentType
-    };
-  }
+    async generateDocument(request: {
+        requirements: string;
+        projectTitle: string;
+        documentType: DocumentType;
+        provider: string;
+        estimationSettings?: any;
+    }): Promise<GeneratedDocument> {
+        const prompt = this.buildPrompt(
+            request.documentType,
+            request.requirements,
+            request.projectTitle,
+            request.estimationSettings
+        );
 
-  async generateAllDocuments(
-    requirements: string,
-    projectTitle: string,
-    provider: string
-  ): Promise<GeneratedDocument[]> {
-    const documentTypes: DocumentType[] = [
-      'prd',
-      'requirements', 
-      'techstack',
-      'backend',
-      'frontend',
-      'flow',
-      'status',
-      'estimation'
-    ];
+        // Use longer timeouts and more tokens for complex documents
+        const isComplexDocument = ['backend', 'frontend', 'techstack', 'estimation'].includes(request.documentType);
+        const options = {
+            maxTokens: isComplexDocument ? 8192 : 4096,
+            temperature: 0.7,
+        };
 
-    const documents: GeneratedDocument[] = [];
-    
-    // Generate documents sequentially to avoid rate limits
-    for (const documentType of documentTypes) {
-      try {
-        console.log(`Generating ${documentType} document...`);
-        const document = await this.generateDocument({
-          requirements,
-          projectTitle,
-          documentType,
-          provider
-        });
-        documents.push(document);
-        
-        // Small delay between generations to be respectful to APIs
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.error(`Failed to generate ${documentType} document:`, error);
-        // Continue with other documents even if one fails
-      }
+        const result = await this.aiFactory.generateWithProvider(
+            request.provider,
+            prompt,
+            options
+        );
+
+        // Validate content quality
+        if (!result.content || result.content.trim().length < 100) {
+            throw new Error(`Failed to generate meaningful content for ${request.documentType}`);
+        }
+
+        // Check for placeholder content that indicates failure
+        if (result.content.includes("Please provide the requirements") ||
+            result.content.includes("I need more information")) {
+            throw new Error(`Generated content for ${request.documentType} is incomplete`);
+        }
+
+        return {
+            filename: this.getDocumentFilename(request.documentType),
+            content: result.content,
+            type: request.documentType
+        };
     }
 
-    return documents;
-  }
+    async generateAllDocuments(
+        requirements: string,
+        projectTitle: string,
+        provider: string
+    ): Promise<GeneratedDocument[]> {
+        const documentTypes: DocumentType[] = [
+            'prd',
+            'requirements',
+            'techstack',
+            'backend',
+            'frontend',
+            'flow',
+            'status',
+            'estimation'
+        ];
 
-  async generateDocumentBatch(
-    requirements: string,
-    projectTitle: string,
-    provider: string,
-    documentTypes: DocumentType[]
-  ): Promise<GeneratedDocument[]> {
-    const documents: GeneratedDocument[] = [];
-    
-    for (const documentType of documentTypes) {
-      try {
-        console.log(`Generating ${documentType} document...`);
-        const document = await this.generateDocument({
-          requirements,
-          projectTitle,
-          documentType,
-          provider
-        });
-        documents.push(document);
-        
-        // Small delay between generations
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.error(`Failed to generate ${documentType} document:`, error);
-      }
+        const documents: GeneratedDocument[] = [];
+
+        // Generate documents sequentially to avoid rate limits
+        for (const documentType of documentTypes) {
+            try {
+                console.log(`Generating ${documentType} document...`);
+                const document = await this.generateDocument({
+                    requirements,
+                    projectTitle,
+                    documentType,
+                    provider
+                });
+                documents.push(document);
+
+                // Small delay between generations to be respectful to APIs
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (error) {
+                console.error(`Failed to generate ${documentType} document:`, error);
+                // Continue with other documents even if one fails
+            }
+        }
+
+        return documents;
     }
 
-    return documents;
-  }
+    async generateDocumentBatch(
+        requirements: string,
+        projectTitle: string,
+        provider: string,
+        documentTypes: DocumentType[]
+    ): Promise<GeneratedDocument[]> {
+        const documents: GeneratedDocument[] = [];
+
+        for (const documentType of documentTypes) {
+            try {
+                console.log(`Generating ${documentType} document...`);
+                const document = await this.generateDocument({
+                    requirements,
+                    projectTitle,
+                    documentType,
+                    provider
+                });
+                documents.push(document);
+
+                // Small delay between generations
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            } catch (error) {
+                console.error(`Failed to generate ${documentType} document:`, error);
+            }
+        }
+
+        return documents;
+    }
 }

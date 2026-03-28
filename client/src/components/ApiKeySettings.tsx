@@ -6,16 +6,20 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/lib/auth-context';
-import { apiKeysAPI } from '@/lib/api';
-import { 
-  Key, 
-  Plus, 
-  Trash2, 
-  Eye, 
+import { apiKeysAPI, githubAPI } from '@/lib/api';
+import {
+  Key,
+  Plus,
+  Trash2,
+  Eye,
   EyeOff,
   Settings,
   CheckCircle,
-  XCircle
+  XCircle,
+  GitBranch,
+  Loader2,
+  Link,
+  Unlink
 } from 'lucide-react';
 
 interface ApiKey {
@@ -48,8 +52,16 @@ export default function ApiKeySettings() {
     key: '',
   });
 
+  // GitHub state
+  const [githubConnected, setGithubConnected] = useState(false);
+  const [githubUsername, setGithubUsername] = useState('');
+  const [githubPat, setGithubPat] = useState('');
+  const [isConnectingGithub, setIsConnectingGithub] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(true);
+
   useEffect(() => {
     loadApiKeys();
+    loadGithubSettings();
   }, []);
 
   const loadApiKeys = async () => {
@@ -69,7 +81,7 @@ export default function ApiKeySettings() {
 
   const handleAddKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!newKey.provider || !newKey.key) {
       toast({
         title: "Error",
@@ -85,7 +97,7 @@ export default function ApiKeySettings() {
         title: "Success",
         description: "API key added successfully",
       });
-      
+
       setNewKey({ provider: '', name: '', key: '' });
       setShowAddForm(false);
       loadApiKeys();
@@ -134,6 +146,70 @@ export default function ApiKeySettings() {
     return PROVIDERS.find(p => p.value === provider)?.label || provider;
   };
 
+  // GitHub functions
+  const loadGithubSettings = async () => {
+    try {
+      const response = await githubAPI.getSettings();
+      setGithubConnected(response.connected);
+      if (response.settings?.username) {
+        setGithubUsername(response.settings.username);
+      }
+    } catch (error) {
+      console.error('Error loading GitHub settings:', error);
+    } finally {
+      setGithubLoading(false);
+    }
+  };
+
+  const connectGithub = async () => {
+    if (!githubPat.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter your GitHub Personal Access Token",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsConnectingGithub(true);
+    try {
+      const result = await githubAPI.connect(githubPat);
+      setGithubConnected(true);
+      setGithubUsername(result.username);
+      setGithubPat('');
+      toast({
+        title: "Success",
+        description: `Connected to GitHub as ${result.username}`,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.response?.data?.error || "Failed to connect to GitHub",
+        variant: "destructive",
+      });
+    } finally {
+      setIsConnectingGithub(false);
+    }
+  };
+
+  const disconnectGithub = async () => {
+    try {
+      await githubAPI.disconnect();
+      setGithubConnected(false);
+      setGithubUsername('');
+      toast({
+        title: "Success",
+        description: "Disconnected from GitHub",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to disconnect from GitHub",
+        variant: "destructive",
+      });
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
@@ -174,7 +250,7 @@ export default function ApiKeySettings() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="provider">Provider *</Label>
-                  <Select value={newKey.provider} onValueChange={(value) => setNewKey({...newKey, provider: value})}>
+                  <Select value={newKey.provider} onValueChange={(value) => setNewKey({ ...newKey, provider: value })}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select provider" />
                     </SelectTrigger>
@@ -190,14 +266,14 @@ export default function ApiKeySettings() {
                     </SelectContent>
                   </Select>
                 </div>
-                
+
                 <div className="space-y-2">
                   <Label htmlFor="name">Name (Optional)</Label>
                   <Input
                     id="name"
                     placeholder="e.g., My OpenAI Key"
                     value={newKey.name}
-                    onChange={(e) => setNewKey({...newKey, name: e.target.value})}
+                    onChange={(e) => setNewKey({ ...newKey, name: e.target.value })}
                   />
                 </div>
               </div>
@@ -209,7 +285,7 @@ export default function ApiKeySettings() {
                   type="password"
                   placeholder="Enter your API key"
                   value={newKey.key}
-                  onChange={(e) => setNewKey({...newKey, key: e.target.value})}
+                  onChange={(e) => setNewKey({ ...newKey, key: e.target.value })}
                 />
               </div>
 
@@ -281,7 +357,7 @@ export default function ApiKeySettings() {
                         )}
                       </Button>
                     </div>
-                    
+
                     <Button
                       variant="ghost"
                       size="sm"
@@ -296,6 +372,86 @@ export default function ApiKeySettings() {
             </Card>
           ))
         )}
+      </div>
+
+      {/* GitHub Integration */}
+      <div className="mt-10">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-2xl font-bold flex items-center gap-2">
+              <GitBranch className="h-6 w-6" />
+              GitHub Integration
+            </h2>
+            <p className="text-muted-foreground">
+              Connect your GitHub account to push generated documents to repositories
+            </p>
+          </div>
+        </div>
+
+        <Card>
+          <CardContent className="p-6">
+            {githubLoading ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-6 w-6 animate-spin" />
+              </div>
+            ) : githubConnected ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <CheckCircle className="h-5 w-5 text-green-500" />
+                  <div>
+                    <p className="font-medium">Connected to GitHub</p>
+                    <p className="text-sm text-muted-foreground">@{githubUsername}</p>
+                  </div>
+                </div>
+                <Button variant="outline" onClick={disconnectGithub} className="flex items-center gap-2">
+                  <Unlink className="h-4 w-4" />
+                  Disconnect
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Enter your GitHub Personal Access Token to enable pushing documents to your repositories.
+                    The token requires <strong>repo</strong> scope.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type="password"
+                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                      value={githubPat}
+                      onChange={(e) => setGithubPat(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button onClick={connectGithub} disabled={isConnectingGithub} className="flex items-center gap-2">
+                      {isConnectingGithub ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Connecting...
+                        </>
+                      ) : (
+                        <>
+                          <Link className="h-4 w-4" />
+                          Connect GitHub
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  <a
+                    href="https://github.com/settings/tokens/new?scopes=repo&description=AID%20Kitty%20MVP%20Generator"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    Generate a new token on GitHub →
+                  </a>
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
