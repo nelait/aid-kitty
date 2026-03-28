@@ -170,11 +170,25 @@ npx tsx server/seed-prompt-templates.ts
 ```
 
 ### Configure Microsoft SSO
-1. Go to [Azure Portal](https://portal.azure.com) → Azure Active Directory → App registrations
-2. Create new registration
-3. Set redirect URI: `https://your-app.azurewebsites.net/api/auth/microsoft/callback`
-4. Note the Client ID and create a Client Secret
-5. Add to App Service environment variables
+1. Go to [Azure Portal](https://portal.azure.com) → search **Microsoft Entra ID** → **App registrations**
+2. Click **+ New registration**
+   - Name: `AID Kitty`
+   - Supported account types: **Accounts in any organizational directory (Multitenant)**
+   - Redirect URI: Select **Web** → `https://your-app.azurewebsites.net/api/auth/microsoft/callback`
+3. Click **Register**
+4. Copy **Application (client) ID** → this is `MICROSOFT_CLIENT_ID`
+5. Copy **Directory (tenant) ID** → this is `MICROSOFT_TENANT_ID`
+6. Go to **Certificates & secrets** → **+ New client secret** → copy the value → this is `MICROSOFT_CLIENT_SECRET`
+7. Add these to App Service environment variables:
+   ```bash
+   az webapp config appsettings set \
+     --name <app-name> \
+     --resource-group <rg-name> \
+     --settings \
+       MICROSOFT_CLIENT_ID="<client-id>" \
+       MICROSOFT_CLIENT_SECRET="<client-secret>" \
+       MICROSOFT_TENANT_ID="<tenant-id>"
+   ```
 
 ### Health Check
 The app exposes a health endpoint:
