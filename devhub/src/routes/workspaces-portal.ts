@@ -24,7 +24,7 @@ const when = (iso: string | null) => (iso ? `${iso.slice(0, 16).replace("T", " "
 
 export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
   const r = express.Router();
-  r.use(["/workspaces", "/admin/workspaces"], express.urlencoded({ extended: false, limit: "64kb" }));
+  r.use(["/workspaces", "/admin/workspaces"], express.urlencoded({ extended: false, limit: "256kb" }));
 
   /** Any signed-in person; POSTs need the CSRF token. */
   const member = (req: Request, res: Response): Principal | null => {
@@ -77,7 +77,8 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
             <p class="muted">${esc(tName.get(w.template_id) ?? "")} · ${perHour(w.hourly_usd_e4)}/hour while running · ${w.disk_gb} GB disk
             ${w.stop_at && (w.state === "running" || w.state === "starting") ? `<br>Stops automatically at ${when(w.stop_at)}${w.idle_minutes ? `, or after ${w.idle_minutes} minutes without activity` : ""}.` : ""}
             ${w.last_active_at && (w.state === "running" || w.state === "starting") ? `<br>Last active ${when(w.last_active_at)}.` : ""}
-            ${w.detail ? `<br>${esc(w.detail)}` : ""}</p>
+            ${w.detail ? `<br>${esc(w.detail)}` : ""}
+            ${setupNote(w) ? `<br>${esc(setupNote(w))}` : ""}</p>
             ${w.budget_stop_at && (w.state === "running" || w.state === "starting") ? `<p class="flash" style="border-color:var(--bad)">Your AI budget for this month is used up, so this workspace stops at ${when(w.budget_stop_at)}. Save your work, or <a href="/">ask for an increase</a>.</p>` : ""}
             ${actions(p, w, "/workspaces")}
             ${hint ? `<details style="margin-top:10px"><summary>Connect with VS Code or SSH</summary><pre>${esc(hint)}</pre>
@@ -252,7 +253,22 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
         <div><label>Stop when idle for (minutes, 0 = never)</label><input name="idle_minutes" type="number" min="0" max="480" value="${t?.idle_minutes ?? 30}"></div>
         <div><label>Available</label><select name="enabled">${options([["1", "Yes"], ["0", "No (hidden from developers)"]], t ? String(t.enabled) : "1")}</select></div>
       </div>
+      ${
+        kind === "coder"
+          ? ""
+          : `<label>Setup script (optional)</label>
+        <textarea name="setup_script" rows="8" spellcheck="false" style="font-family:ui-monospace,monospace" placeholder="#!/bin/bash&#10;# Runs once as root after Dev Hub's setup. DEVHUB_USER_EMAIL, DEVHUB_WORKSPACE_NAME and DEVHUB_USER (dev) are set.&#10;apt-get install -y postgresql-client&#10;sudo -u dev git clone https://github.com/acme/payments /home/dev/payments">${esc(t?.setup_script ?? "")}</textarea>
+        <p class="muted">Runs once as root on first boot, after Dev Hub's own setup; without a <code>#!</code> line it runs with bash in strict mode. Up to 32 KB. Its output goes to <code>/var/log/devhub-template-setup.log</code>, and failures show on the workspace. It's stored in the machine's user data, so don't put secrets in it. Changes apply to new workspaces.</p>`
+      }
       <p><button>${label}</button></p></form>`;
+  };
+
+  /** What the template's setup script is doing, for a running workspace. */
+  const setupNote = (w: { setup_status: string | null; state: string }) => {
+    if (w.state !== "running" && w.state !== "starting") return "";
+    if (w.setup_status === "running") return "Running the template's setup script…";
+    const failed = /^failed (\d+)$/.exec(w.setup_status ?? "");
+    return failed ? `The template's setup script failed (exit code ${failed[1]}). See /var/log/devhub-template-setup.log on the machine.` : "";
   };
 
   const CONFIG_FIELDS: Record<string, string[]> = {
@@ -269,6 +285,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
     stop_after_hours: Number(req.body.stop_after_hours || 8),
     idle_minutes: req.body.idle_minutes === undefined || req.body.idle_minutes === "" ? 30 : Number(req.body.idle_minutes),
     enabled: req.body.enabled !== "0",
+    setup_script: req.body.setup_script ?? "",
     config: Object.fromEntries(
       (CONFIG_FIELDS[kind] ?? []).map((k) => [k, k === "diskGb" ? Number(req.body[k] || 0) : req.body[k]]),
     ),
@@ -303,23 +320,23 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
               all
                 .map(
                   (w) => `<tr><td>${esc(w.email)}</td><td>${esc(w.name)}<div class="muted"><code>${esc(w.machine_id ?? "")}</code></div></td><td>${esc(w.template)}</td>
-                  <td>${STATE_LABEL[w.state] ?? esc(w.state)}</td><td>${w.state === "running" || w.state === "starting" ? (w.budget_stop_at ? `<strong>Budget used up:</strong> ${when(w.budget_stop_at)}` : when(w.stop_at)) : ""}</td>
+                  <td>${STATE_LABEL[w.state] ?? esc(w.state)}${setupNote(w) ? `<div class="muted">${/failed/.test(w.setup_status ?? "") ? "Setup script failed" : "Setup script running"}</div>` : ""}</td><td>${w.state === "running" || w.state === "starting" ? (w.budget_stop_at ? `<strong>Budget used up:</strong> ${when(w.budget_stop_at)}` : when(w.stop_at)) : ""}</td>
                   <td>${w.state === "running" || w.state === "starting" ? (w.last_active_at ? when(w.last_active_at) : w.idle_minutes ? `<span class="muted">no reports yet</span>` : "") : ""}</td>
                   <td class="n">${fmtUsd(costs.get(w.user_id) ?? 0)}</td><td>${actions(p, w, "/admin/workspaces", "admin")}</td></tr>`,
                 )
                 .join("") || `<tr><td colspan="8" class="muted">No workspaces.</td></tr>`
             }</tbody></table></div>
           <div class="card scroll"><h2>Templates</h2>
-            <table><thead><tr><th>Name</th><th>Backend</th><th>Machine</th><th class="n">Per hour</th><th class="n">Auto-stop</th><th class="n">Idle stop</th><th>Available</th></tr></thead><tbody>
+            <table><thead><tr><th>Name</th><th>Backend</th><th>Machine</th><th class="n">Per hour</th><th class="n">Auto-stop</th><th class="n">Idle stop</th><th>Setup script</th><th>Available</th></tr></thead><tbody>
             ${
               templates
                 .map(
                   (t) => `<tr><td><a href="/admin/workspaces/templates/${t.id}">${esc(t.name)}</a></td>
                     <td>${esc(PROVIDER_LABELS[t.provider] ?? t.provider)}${ws.providers.has(t.provider) ? "" : ` <span class="badge">not configured</span>`}</td>
                     <td>${machineSummary(t)}</td>
-                    <td class="n">${perHour(t.hourly_usd_e4)}</td><td class="n">${t.stop_after_hours}h</td><td class="n">${t.idle_minutes ? `${t.idle_minutes} min` : "Off"}</td><td>${t.enabled ? "Yes" : "No"}</td></tr>`,
+                    <td class="n">${perHour(t.hourly_usd_e4)}</td><td class="n">${t.stop_after_hours}h</td><td class="n">${t.idle_minutes ? `${t.idle_minutes} min` : "Off"}</td><td>${t.setup_script ? `${t.setup_script.trimEnd().split("\n").length} lines` : ""}</td><td>${t.enabled ? "Yes" : "No"}</td></tr>`,
                 )
-                .join("") || `<tr><td colspan="7" class="muted">No templates yet.</td></tr>`
+                .join("") || `<tr><td colspan="8" class="muted">No templates yet.</td></tr>`
             }</tbody></table></div>
           <div class="card"><h2>Add a template</h2>
             ${[...ws.providers.keys()]

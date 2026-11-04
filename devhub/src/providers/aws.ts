@@ -1,3 +1,4 @@
+import { gzipSync } from "node:zlib";
 import {
   DescribeInstancesCommand,
   EC2Client,
@@ -69,6 +70,14 @@ const STATE: Record<string, MachineState> = {
  * Hub never stores AWS keys. Instances get no public IP; developers connect through
  * Session Manager. IMDSv2 is required and volumes are encrypted.
  */
+/** EC2 allows 16 KB of user data. Larger setup scripts are gzipped, which cloud-init unpacks. */
+export function encodeUserData(script: string): string {
+  let body = Buffer.from(script);
+  if (body.length > 16_384) body = gzipSync(body, { level: 9 });
+  if (body.length > 16_384) throw new HttpError(400, "The setup script is too large for EC2 user data even compressed; shorten the template's setup script.");
+  return body.toString("base64");
+}
+
 export class AwsProvider implements WorkspaceProvider {
   kind = "aws";
   usesSetupScript = true;
@@ -92,7 +101,7 @@ export class AwsProvider implements WorkspaceProvider {
         InstanceType: t.instanceType as _InstanceType,
         MinCount: 1,
         MaxCount: 1,
-        UserData: Buffer.from(spec.userData).toString("base64"),
+        UserData: encodeUserData(spec.userData),
         IamInstanceProfile: { Name: t.instanceProfile },
         NetworkInterfaces: [{ DeviceIndex: 0, SubnetId: t.subnetId, Groups: t.securityGroupIds, AssociatePublicIpAddress: false }],
         BlockDeviceMappings: [{ DeviceName: "/dev/sda1", Ebs: { VolumeSize: t.diskGb, VolumeType: "gp3", Encrypted: true, DeleteOnTermination: true } }],

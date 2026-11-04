@@ -96,7 +96,14 @@ Set `DEVHUB_POLICY_TOKEN` so AWS and GCP workspaces can fetch the Claude Code po
 - When someone is deactivated (in Okta or by an admin), their workspaces stop straight away.
 - Turn it off with `workspaces.stopWhenBudgetUsedUp: false`; workspaces then only stop on their schedule or when idle.
 
-**Not yet:** custom setup scripts per template.
+**Template setup scripts.** An AWS or GCP template can carry its own first-boot script, for toolchains, repo checkouts, internal certificates and the like:
+
+- It runs once as root, after Dev Hub's own setup (the `dev` user, Git, Node.js, Claude Code, the policy helper and agent). It gets `DEVHUB_USER_EMAIL`, `DEVHUB_WORKSPACE_NAME` and `DEVHUB_USER` (`dev`); use `sudo -u dev ...` for steps that should run as the developer.
+- Without a `#!` line it runs with bash in strict mode (`set -euo pipefail`), so a failing step fails the script. Up to 32 KB; download anything bigger. On AWS, setup scripts over EC2's 16 KB user-data limit are gzipped automatically.
+- Output goes to `/var/log/devhub-template-setup.log`. The agent reports whether it's running, done or failed (with the exit code), and the Workspaces pages show it. A failure doesn't stop the rest of setup or the machine.
+- The script is stored in the machine's user data (EC2) or metadata (GCP), which people with read access to the instance can see: don't put secrets in it. Fetch them at run time instead, e.g. from AWS Secrets Manager or Google Secret Manager using the workspace's instance role or service account.
+- Edits apply to new workspaces. Every version is kept in the audit log, with its SHA-256.
+- Coder templates set machines up in Coder itself, so they don't take one.
 
 ## Return on spend
 
@@ -387,6 +394,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 2b)** | Google Compute Engine and Coder workspace backends alongside AWS | Workspaces wherever the customer runs |
 | **Done (Phase 2c)** | Idle detection: stop workspaces nobody is using (agent on AWS/GCP, Coder's own activity), with terminal warnings | Idle machines stop costing money in 30 minutes, not 8 hours |
 | **Done (Phase 2d)** | Stop running workspaces when a budget runs out (with a grace period and warnings) or their owner is deactivated | Workspace spend can't run past the budget |
+| **Done (Phase 2e)** | Setup scripts per workspace template (AWS and GCP), with progress and failures shown in the portal and every version audited | Teams get machines ready for their stack, not a bare image |
 | Phase 3 | Per-PR preview environments with TTL | |
 
 ## Connector notes

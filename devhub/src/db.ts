@@ -163,7 +163,8 @@ CREATE TABLE IF NOT EXISTS workspace_templates (
   storage_gb_month_cents INTEGER NOT NULL,
   stop_after_hours INTEGER NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 1,
-  idle_minutes INTEGER NOT NULL DEFAULT 30
+  idle_minutes INTEGER NOT NULL DEFAULT 30,
+  setup_script TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS workspaces (
   id ${pk},
@@ -184,7 +185,8 @@ CREATE TABLE IF NOT EXISTS workspaces (
   last_active_at TEXT,
   last_heartbeat_at TEXT,
   agent_token_hash TEXT,
-  budget_stop_at TEXT
+  budget_stop_at TEXT,
+  setup_status TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS workspaces_agent_token ON workspaces (agent_token_hash);
 CREATE TABLE IF NOT EXISTS workspace_runs (
@@ -304,6 +306,8 @@ async function openSqlite(path: string): Promise<Db> {
   addColumn("workspaces", "last_heartbeat_at", "TEXT");
   addColumn("workspaces", "agent_token_hash", "TEXT");
   addColumn("workspaces", "budget_stop_at", "TEXT");
+  addColumn("workspaces", "setup_status", "TEXT");
+  addColumn("workspace_templates", "setup_script", "TEXT NOT NULL DEFAULT ''");
   s.exec(schema("sqlite"));
   // Earlier versions matched emails and GitHub logins case-insensitively in SQL; now the
   // app stores them lowercase so the same queries work on Postgres.
@@ -386,6 +390,8 @@ async function openPostgres(url: string): Promise<Db> {
     await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS last_heartbeat_at TEXT");
     await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS agent_token_hash TEXT");
     await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS budget_stop_at TEXT");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS setup_status TEXT");
+    await q.run("ALTER TABLE workspace_templates ADD COLUMN IF NOT EXISTS setup_script TEXT NOT NULL DEFAULT ''");
   });
   return db;
 }

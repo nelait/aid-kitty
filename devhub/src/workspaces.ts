@@ -25,6 +25,8 @@ export interface WorkspaceTemplate {
   enabled: number;
   /** Stop a running workspace after this many minutes without activity; 0 = never. */
   idle_minutes: number;
+  /** Extra first-boot script, run as root after Dev Hub's own setup (AWS and GCP only). Empty for none. */
+  setup_script: string;
 }
 
 export interface Workspace {
@@ -50,6 +52,8 @@ export interface Workspace {
   agent_token_hash: string | null;
   /** Set when the owner's budget ran out while it was running: it stops at this time unless the budget is raised. */
   budget_stop_at: string | null;
+  /** The template setup script's progress, as reported by the agent: "running", "ok" or "failed <exit code>". */
+  setup_status: string | null;
 }
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
@@ -76,15 +80,52 @@ const AGENT_SCRIPT = `#!/bin/sh
 SSH=$(ss -Htn state established '( sport = :22 )' 2>/dev/null | wc -l)
 LOAD=$(cut -d' ' -f1 /proc/loadavg)
 CPUS=$(nproc 2>/dev/null || echo 1)
+SETUP=$(cat /var/lib/devhub/template-setup.status 2>/dev/null)
 WARN=$(curl -fsS --max-time 10 -X POST "$DEVHUB_URL/api/workspaces/heartbeat" \\
   -H "authorization: Bearer $DEVHUB_AGENT_TOKEN" -H "content-type: application/json" \\
-  -d "{\\"ssh\\":$SSH,\\"load1\\":$LOAD,\\"cpus\\":$CPUS}" 2>/dev/null) || exit 0
+  -d "{\\"ssh\\":$SSH,\\"load1\\":$LOAD,\\"cpus\\":$CPUS,\\"setup\\":\\"$SETUP\\"}" 2>/dev/null) || exit 0
 [ -n "$WARN" ] && wall "$WARN" 2>/dev/null
 exit 0
 `;
 
+const MAX_SETUP_SCRIPT_BYTES = 32_768;
+const SETUP_STATUS_RE = /^(running|ok|failed \d{1,3})$/;
+
+/** Normalises a template's setup script: LF line endings, a shebang (bash by default), "" for none. */
+export function validateSetupScript(raw: unknown): string {
+  let s = String(raw ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!s) return "";
+  if (s.includes("\0")) throw new HttpError(400, "setup_script must be text");
+  if (!s.startsWith("#!")) s = `#!/bin/bash\nset -euo pipefail\n${s}`;
+  if (Buffer.byteLength(s) > MAX_SETUP_SCRIPT_BYTES) throw new HttpError(400, `setup_script can be at most ${MAX_SETUP_SCRIPT_BYTES / 1024} KB; have it download anything bigger`);
+  return `${s}\n`;
+}
+
+/** Single-quotes a value for sh. */
+const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+
+/** The template's own script, run once after Dev Hub's setup. Its result goes in a status file the agent reports. */
+function templateSetup(script: string, user: User, workspaceName: string): string {
+  if (!script) return "";
+  // A terminator the script can't contain, so any script text is safe inside the heredoc.
+  let end = "DEVHUB_TEMPLATE_SETUP";
+  while (script.split("\n").includes(end)) end += "_";
+  return `
+# The template's setup script, run once as root. Output: /var/log/devhub-template-setup.log
+cat > /var/lib/devhub/template-setup.sh <<'${end}'
+${script}${end}
+chmod 700 /var/lib/devhub/template-setup.sh
+echo running > /var/lib/devhub/template-setup.status
+if DEVHUB_USER_EMAIL=${shq(user.email)} DEVHUB_WORKSPACE_NAME=${shq(workspaceName)} DEVHUB_USER=dev /var/lib/devhub/template-setup.sh > /var/log/devhub-template-setup.log 2>&1; then
+  echo ok > /var/lib/devhub/template-setup.status
+else
+  echo "failed $?" > /var/lib/devhub/template-setup.status
+fi
+`;
+}
+
 /** cloud-init script: a `dev` user with the developer's key, Claude Code, Dev Hub's policy helper and activity agent. */
-export function userData(cfg: Config, user: User, sshKey: string, agentToken = ""): string {
+export function userData(cfg: Config, user: User, sshKey: string, agentToken = "", template: { script: string; workspaceName: string } = { script: "", workspaceName: "" }): string {
   const env = [`DEVHUB_URL=${cfg.publicUrl}`, `DEVHUB_POLICY_TOKEN=${cfg.policyToken ?? ""}`, `DEVHUB_USER_EMAIL=${user.email}`].join("\n");
   return `#!/bin/bash
 # Dev Hub workspace setup for ${user.email}. Expects an Ubuntu or Debian image with the SSM agent.
@@ -147,7 +188,8 @@ if ! command -v node >/dev/null || ! node -v | grep -q '^v22'; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
 fi
 npm install -g @anthropic-ai/claude-code
-install -d /var/lib/devhub && touch /var/lib/devhub/setup-done
+install -d /var/lib/devhub
+${templateSetup(template.script, user, template.workspaceName)}touch /var/lib/devhub/setup-done
 `;
 }
 
@@ -230,18 +272,23 @@ export class WorkspaceService {
     const idle = Number(b.idle_minutes ?? 30);
     if (!Number.isInteger(idle) || idle < 0 || idle > 480) throw new HttpError(400, "idle_minutes must be a whole number from 0 (never) to 480");
     if (idle > 0 && idle < 10) throw new HttpError(400, "idle_minutes must be 0 (never) or at least 10, so a short break doesn't stop a workspace");
+    const script = validateSetupScript(b.setup_script);
+    if (script && !this.providers.get(kind)!.usesSetupScript) {
+      throw new HttpError(400, `${PROVIDER_LABELS[kind] ?? kind} sets up machines from its own templates; put setup steps there instead of in setup_script`);
+    }
+    const before = id === null ? null : await this.db.get<{ setup_script: string }>("SELECT setup_script FROM workspace_templates WHERE id = ?", id);
     // Hourly prices keep 4 decimals (AWS lists e.g. $0.1664), so they're stored in 1/10,000 USD.
-    const values = [name, kind, JSON.stringify(config), Math.round(hourly * 10_000), Math.round(storage * 100), stopAfter, enabled, idle] as const;
+    const values = [name, kind, JSON.stringify(config), Math.round(hourly * 10_000), Math.round(storage * 100), stopAfter, enabled, idle, script] as const;
     try {
       if (id === null) {
         id = await insertId(
           this.db,
-          "INSERT INTO workspace_templates (name, provider, config, hourly_usd_e4, storage_gb_month_cents, stop_after_hours, enabled, idle_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO workspace_templates (name, provider, config, hourly_usd_e4, storage_gb_month_cents, stop_after_hours, enabled, idle_minutes, setup_script) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
           ...values,
         );
       } else {
         const r = await this.db.run(
-          "UPDATE workspace_templates SET name = ?, provider = ?, config = ?, hourly_usd_e4 = ?, storage_gb_month_cents = ?, stop_after_hours = ?, enabled = ?, idle_minutes = ? WHERE id = ?",
+          "UPDATE workspace_templates SET name = ?, provider = ?, config = ?, hourly_usd_e4 = ?, storage_gb_month_cents = ?, stop_after_hours = ?, enabled = ?, idle_minutes = ?, setup_script = ? WHERE id = ?",
           ...values,
           id,
         );
@@ -253,7 +300,20 @@ export class WorkspaceService {
       }
       throw e;
     }
-    await audit(this.db, actor, "workspace.template.saved", { id, name, provider: kind, config, hourly_usd: hourly, stopAfter, enabled, idleMinutes: idle });
+    // Setup scripts run as root on developers' machines: keep every version in the audit log.
+    const scriptChanged = (before?.setup_script ?? "") !== script;
+    await audit(this.db, actor, "workspace.template.saved", {
+      id,
+      name,
+      provider: kind,
+      config,
+      hourly_usd: hourly,
+      stopAfter,
+      enabled,
+      idleMinutes: idle,
+      setupScriptSha256: script ? sha256(script) : null,
+      ...(scriptChanged ? { setupScript: script } : {}),
+    });
     return (await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ?", id))!;
   }
 
@@ -343,7 +403,9 @@ export class WorkspaceService {
     );
     let ws = await this.get(id);
     try {
-      const setup = provider.usesSetupScript ? userData(this.cfg, user, sshKey!.k!, agentToken!) : "";
+      const setup = provider.usesSetupScript
+        ? userData(this.cfg, user, sshKey!.k!, agentToken!, { script: t.setup_script ?? "", workspaceName: name })
+        : "";
       const machineId = await provider.create(JSON.parse(t.config), { workspaceId: id, name, ownerEmail: user.email, userData: setup });
       await this.db.tx(async (q) => {
         await this.setState(q, ws, "starting", { machine_id: machineId, stop_at: this.iso(this.now() + t.stop_after_hours * 3_600_000), detail: null });
@@ -557,9 +619,10 @@ export class WorkspaceService {
     const cpus = Math.max(1, num(b.cpus, 1024));
     const active = ssh > 0 || load / cpus >= ACTIVE_LOAD_PER_CPU;
     const now = this.iso();
+    const setup = typeof b.setup === "string" && SETUP_STATUS_RE.test(b.setup) ? b.setup : null;
     await this.db.run(
-      `UPDATE workspaces SET last_heartbeat_at = ?${active ? ", last_active_at = ?" : ""} WHERE id = ?`,
-      ...(active ? [now, now, ws.id] : [now, ws.id]),
+      `UPDATE workspaces SET last_heartbeat_at = ?${active ? ", last_active_at = ?" : ""}${setup ? ", setup_status = ?" : ""} WHERE id = ?`,
+      ...[now, ...(active ? [now] : []), ...(setup ? [setup] : []), ws.id],
     );
     if (ws.state !== "running" && ws.state !== "starting") return "";
 
