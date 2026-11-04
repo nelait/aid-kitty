@@ -49,7 +49,8 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 43 tests: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 46 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
 
@@ -58,6 +59,7 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | Variable | Purpose |
 | --- | --- |
 | `DEVHUB_PUBLIC_URL`, `PORT`, `DEVHUB_DB` | Where it's served and the SQLite file |
+| `DATABASE_URL` | `postgres://user:pass@host:5432/devhub` to use Postgres instead of SQLite (needed for more than one replica) |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | Okta (or any OIDC IdP). Redirect URI: `<public url>/auth/callback` |
 | `OIDC_ADMIN_GROUP`, `OIDC_GROUPS_CLAIM` | IdP group that makes people Dev Hub admins; claim name (default `groups`) |
 | `CLAUDE_ADMIN_BASE_URL`, `CLAUDE_ADMIN_KEY`, `CLAUDE_MODE` | Gateway URL + an `admin.write_keys` key (`gateway`), or `https://api.anthropic.com` + a scoped key (`enterprise`) |
@@ -87,7 +89,16 @@ Or let Okta do it: see [SCIM provisioning](#scim-provisioning-okta). People are 
 
 ## Deploy (self-hosted)
 
-Dev Hub ships as a container image, a Helm chart and a Terraform module. It keeps its data in SQLite on a persistent volume, so it runs as **one replica** and upgrades with the Recreate strategy (a few seconds of downtime). Back up the volume (e.g. volume snapshots).
+Dev Hub ships as a container image, a Helm chart and a Terraform module. Pick a database:
+
+| | SQLite (default) | Postgres |
+| --- | --- | --- |
+| Setup | Nothing: a file on a persistent volume | `DATABASE_URL` pointing at a managed Postgres (RDS, Cloud SQL, Azure Database) or your own, version 13 or later (tested on 16) |
+| Replicas | One. Upgrades use Recreate (a few seconds of downtime) | Several, with rolling upgrades and no downtime |
+| Backups | Volume snapshots | Your Postgres backups |
+| Good for | Evaluation and small teams | Production, high availability |
+
+Dev Hub creates its schema on first start; replicas starting together take turns (a Postgres advisory lock). With several replicas, only one runs the scheduled sync at a time: it holds a lease in the database, and another replica takes over if it stops renewing for three sync intervals.
 
 **Container image** (`Dockerfile`): multi-stage Node 22 build, runs as the non-root `node` user, data in `/data`, config at `/etc/devhub/devhub.config.json`.
 
@@ -95,7 +106,7 @@ Dev Hub ships as a container image, a Helm chart and a Terraform module. It keep
 docker build -t ghcr.io/your-org/devhub:0.1.0 .
 ```
 
-**Helm** (`charts/devhub`): non-secret settings go under `config:` and are rendered into the config file. Secrets come from a Kubernetes Secret as environment variables. Point `secrets.existingSecret` at one you manage (External Secrets, Vault), or set `secrets.values` for a quick evaluation. The pod runs non-root with a read-only root filesystem, all capabilities dropped and no service-account token.
+**Helm** (`charts/devhub`): set `database.type=postgres`, `replicaCount` and `DATABASE_URL` in the Secret for Postgres; the chart then drops the volume and uses rolling updates, and refuses SQLite with more than one replica. Non-secret settings go under `config:` and are rendered into the config file. Secrets come from a Kubernetes Secret as environment variables. Point `secrets.existingSecret` at one you manage (External Secrets, Vault), or set `secrets.values` for a quick evaluation. The pod runs non-root with a read-only root filesystem, all capabilities dropped and no service-account token.
 
 ```bash
 helm install devhub charts/devhub -n devhub --create-namespace \
@@ -107,7 +118,7 @@ helm install devhub charts/devhub -n devhub --create-namespace \
   --set ingress.enabled=true --set ingress.host=devhub.acme.io
 ```
 
-**Terraform** (`terraform/modules/devhub`): installs the chart into an existing cluster and creates the Secret. See `terraform/examples/basic` for a complete example. Secrets passed in `var.secrets` end up in Terraform state, so protect the state or pass `existing_secret` instead. The module outputs the Okta redirect URI and SCIM base URL to paste into Okta.
+**Terraform** (`terraform/modules/devhub`): installs the chart into an existing cluster and creates the Secret. Set `database_type = "postgres"`, `database_url` and `replicas` for high availability. See `terraform/examples/basic` for a complete example. Secrets passed in `var.secrets` end up in Terraform state, so protect the state or pass `existing_secret` instead. The module outputs the Okta redirect URI and SCIM base URL to paste into Okta.
 
 ## Licensing
 
@@ -196,7 +207,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1b)** | Copilot premium-request overage; Cursor connector | Heavy Copilot users and Cursor teams counted in the wallet |
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
-| P1 | Postgres option (needs the data layer moved to async) | High availability and more than one replica |
+| **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
 | P1 | Publish the image (CI), AWS/GCP Marketplace listings | Distribution |
 | P2 | Policy pack: generate the gateway's per-group `managed` blocks (MCP allowlist, permission denies) from one Dev Hub policy | One policy across tools |
 | P2 | Spend → output reporting (join spend with GitHub PRs and commits) | ROI view for finance |

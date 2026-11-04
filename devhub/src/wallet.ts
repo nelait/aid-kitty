@@ -1,5 +1,5 @@
 import type { Config } from "./config.js";
-import { getTeam, type Db, type User } from "./db.js";
+import { getTeam, type Queryable, type User } from "./db.js";
 
 /** Calendar month in UTC, "YYYY-MM" (matches the Claude spend-limit reset boundary). */
 export function currentPeriod(d = new Date()): string {
@@ -26,31 +26,31 @@ export interface WalletStatus {
   state: "ok" | "warning" | "exhausted";
 }
 
-export function baseBudgetCents(db: Db, cfg: Config, user: User): number {
+export async function baseBudgetCents(db: Queryable, cfg: Config, user: User): Promise<number> {
   if (user.monthly_budget_cents !== null) return user.monthly_budget_cents;
-  const team = getTeam(db, user.team_id);
+  const team = await getTeam(db, user.team_id);
   if (team?.member_default_cents != null) return team.member_default_cents;
   return usdToCents(cfg.wallet.defaultMonthlyBudgetUsd);
 }
 
-export function walletFor(db: Db, cfg: Config, user: User, period = currentPeriod()): WalletStatus {
-  const base = user.status === "active" ? baseBudgetCents(db, cfg, user) : 0;
+export async function walletFor(db: Queryable, cfg: Config, user: User, period = currentPeriod()): Promise<WalletStatus> {
+  const base = user.status === "active" ? await baseBudgetCents(db, cfg, user) : 0;
   const raises =
     user.status === "active"
       ? Number(
-          (
-            db
-              .prepare(
-                "SELECT COALESCE(SUM(amount_cents),0) AS c FROM raise_requests WHERE user_id = ? AND period = ? AND status = 'approved'",
-              )
-              .get(user.id, period) as { c: number }
-          ).c,
+          (await db.get<{ c: number }>(
+            "SELECT COALESCE(SUM(amount_cents),0) AS c FROM raise_requests WHERE user_id = ? AND period = ? AND status = 'approved'",
+            user.id,
+            period,
+          ))!.c,
         )
       : 0;
 
-  const rows = db
-    .prepare("SELECT tool, cents FROM spend WHERE user_id = ? AND period = ?")
-    .all(user.id, period) as { tool: string; cents: number }[];
+  const rows = await db.all<{ tool: string; cents: number }>(
+    "SELECT tool, cents FROM spend WHERE user_id = ? AND period = ?",
+    user.id,
+    period,
+  );
   const spendByTool: Record<string, number> = {};
   for (const r of rows) spendByTool[r.tool] = Number(r.cents);
   const spend = Object.values(spendByTool).reduce((a, b) => a + b, 0);
@@ -59,16 +59,14 @@ export function walletFor(db: Db, cfg: Config, user: User, period = currentPerio
   let remaining = limit - spend;
 
   let teamInfo: WalletStatus["team"];
-  const team = getTeam(db, user.team_id);
+  const team = await getTeam(db, user.team_id);
   if (team) {
     const teamSpend = Number(
-      (
-        db
-          .prepare(
-            "SELECT COALESCE(SUM(s.cents),0) AS c FROM spend s JOIN users u ON u.id = s.user_id WHERE u.team_id = ? AND s.period = ?",
-          )
-          .get(team.id, period) as { c: number }
-      ).c,
+      (await db.get<{ c: number }>(
+        "SELECT COALESCE(SUM(s.cents),0) AS c FROM spend s JOIN users u ON u.id = s.user_id WHERE u.team_id = ? AND s.period = ?",
+        team.id,
+        period,
+      ))!.c,
     );
     teamInfo = { name: team.name, poolCents: team.monthly_pool_cents, spendCents: teamSpend };
     if (team.monthly_pool_cents !== null) {

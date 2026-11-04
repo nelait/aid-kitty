@@ -1,11 +1,14 @@
-import express, { type Request, type Response } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import { csrfOk, type Principal } from "../auth.js";
 import type { Config } from "../config.js";
 import type { Db, RaiseRequest, User } from "../db.js";
 import { HttpError, createRaiseRequest, decideRaiseRequest, listDecidable, spendReport } from "../service.js";
 import { licenseStatus, type LicenseStatus } from "../license.js";
 import type { SyncService } from "../sync.js";
-import { currentPeriod, fmtUsd, walletFor } from "../wallet.js";
+import { currentPeriod, fmtUsd, walletFor, type WalletStatus } from "../wallet.js";
+
+const wrap = (fn: (req: Request, res: Response) => unknown) => (req: Request, res: Response, next: NextFunction) =>
+  Promise.resolve(fn(req, res)).catch(next);
 
 const esc = (v: unknown) =>
   String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -66,7 +69,7 @@ function loginPage(cfg: Config): string {
   );
 }
 
-function walletCard(cfg: Config, w: ReturnType<typeof walletFor>): string {
+function walletCard(cfg: Config, w: WalletStatus): string {
   const pct = w.limitCents > 0 ? Math.min(100, Math.round((w.spendCents / w.limitCents) * 100)) : 100;
   const tools = Object.entries(w.spendByTool)
     .map(([t, c]) => `<tr><td>${esc(t)}</td><td class="n">${fmtUsd(c)}</td></tr>`)
@@ -119,12 +122,12 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
   };
   const csrfField = (p: Principal) => `<input type="hidden" name="_csrf" value="${esc(p.csrf)}">`;
 
-  r.get("/", (req, res) => {
+  r.get("/", wrap(async (req, res) => {
     const p = signedIn(req, res);
     if (!p) return;
     const u = p.user!;
-    const w = walletFor(db, cfg, u);
-    const mine = db.prepare("SELECT * FROM raise_requests WHERE user_id = ? ORDER BY id DESC LIMIT 20").all(u.id) as unknown as RaiseRequest[];
+    const w = await walletFor(db, cfg, u);
+    const mine = await db.all<RaiseRequest>("SELECT * FROM raise_requests WHERE user_id = ? ORDER BY id DESC LIMIT 20", u.id);
     const gw = cfg.claudeGatewayUrl;
     const connect = gw
       ? `<p>Run <code>claude</code>, type <code>/login</code>, choose <b>Cloud gateway</b> and enter:</p><pre>${esc(gw)}</pre>
@@ -146,29 +149,33 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
         <div class="card"><h2>Connect Claude Code</h2>${connect}</div>`,
       ),
     );
-  });
+  }));
 
-  r.post("/portal/raise", (req, res) => {
+  r.post("/portal/raise", wrap(async (req, res) => {
     const p = signedIn(req, res);
     if (!p) return;
     if (!csrfOk(req)) return res.status(403).send("Bad CSRF token; reload the page.");
     try {
-      createRaiseRequest(db, cfg, p.user!, Number(req.body.amount_usd), String(req.body.reason ?? ""));
+      await createRaiseRequest(db, cfg, p.user!, Number(req.body.amount_usd), String(req.body.reason ?? ""));
       back(res, "/", "Request sent to your manager.");
     } catch (e) {
       back(res, "/", e instanceof HttpError ? e.message : "Something went wrong.");
     }
-  });
+  }));
 
-  r.get("/approvals", (req, res) => {
+  r.get("/approvals", wrap(async (req, res) => {
     const p = signedIn(req, res);
     if (!p) return;
-    const rows = listDecidable(db, p);
-    const body = rows.length
-      ? rows
+    const list = await listDecidable(db, p);
+    const wallets = new Map<number, WalletStatus>();
+    for (const rq of list) {
+      const requester = (await db.get<User>("SELECT * FROM users WHERE id = ?", rq.user_id))!;
+      wallets.set(rq.id, await walletFor(db, cfg, requester));
+    }
+    const body = list.length
+      ? list
           .map((rq) => {
-            const requester = db.prepare("SELECT * FROM users WHERE id = ?").get(rq.user_id) as unknown as User;
-            const w = walletFor(db, cfg, requester);
+            const w = wallets.get(rq.id)!;
             return `<div class="card"><h2>${esc(rq.email)} asks for ${fmtUsd(rq.amount_cents)}</h2>
               <p>${esc(rq.reason)}</p>
               <p class="muted">This month: ${fmtUsd(w.spendCents)} spent of ${fmtUsd(w.limitCents)}. Requested ${esc(rq.created_at.slice(0, 16).replace("T", " "))} UTC.</p>
@@ -180,9 +187,9 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
           .join("")
       : `<div class="card"><p class="muted">Nothing waiting for you.</p></div>`;
     res.send(page("Approvals", p, `${flash(req)}<h1>Budget requests</h1>${body}`));
-  });
+  }));
 
-  r.post("/portal/requests/:id/decision", async (req, res) => {
+  r.post("/portal/requests/:id/decision", wrap(async (req, res) => {
     const p = signedIn(req, res);
     if (!p) return;
     if (!csrfOk(req)) return res.status(403).send("Bad CSRF token; reload the page.");
@@ -193,14 +200,14 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
     } catch (e) {
       back(res, "/approvals", e instanceof HttpError ? e.message : "Something went wrong.");
     }
-  });
+  }));
 
-  r.get("/admin", (req, res) => {
+  r.get("/admin", wrap(async (req, res) => {
     const p = signedIn(req, res);
     if (!p) return;
     if (!p.isAdmin) return res.status(403).send(page("Admin", p, `<div class="card">Admins only.</div>`));
     const period = currentPeriod();
-    const report = spendReport(db, cfg, period);
+    const report = await spendReport(db, cfg, period);
     const teams = new Map<string, { spend: number; limit: number; users: number }>();
     for (const row of report.rows) {
       const k = row.team ?? "(no team)";
@@ -210,21 +217,20 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
       t.users++;
       teams.set(k, t);
     }
-    const runs = db.prepare("SELECT * FROM sync_runs ORDER BY id DESC LIMIT 6").all() as {
-      ts: string;
-      connector: string;
-      ok: number;
-      message: string;
-    }[];
-    const unmatched = db
-      .prepare("SELECT tool, COUNT(*) AS n, SUM(cents) AS c FROM unmatched_spend WHERE period = ? GROUP BY tool")
-      .all(period) as { tool: string; n: number; c: number }[];
+    const runs = await db.all<{ ts: string; connector: string; ok: number; message: string }>(
+      "SELECT * FROM sync_runs ORDER BY id DESC LIMIT 6",
+    );
+    const unmatched = await db.all<{ tool: string; n: number; c: number }>(
+      "SELECT tool, COUNT(*) AS n, SUM(cents) AS c FROM unmatched_spend WHERE period = ? GROUP BY tool",
+      period,
+    );
+    const license = await licenseStatus(db, cfg);
     const toolCols = report.tools;
     res.send(
       page(
         "Admin",
         p,
-        `${flash(req)}${licenseCard(licenseStatus(db, cfg))}<h1>Spend for ${esc(period)}</h1>
+        `${flash(req)}${licenseCard(license)}<h1>Spend for ${esc(period)}</h1>
         <div class="card scroll"><h2>By team</h2><table><thead><tr><th>Team</th><th class="n">People</th><th class="n">Spent</th><th class="n">Budgets</th></tr></thead><tbody>
           ${[...teams]
             .sort((a, b) => b[1].spend - a[1].spend)
@@ -251,14 +257,19 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
           <form method="post" action="/portal/sync" style="margin-top:10px">${csrfField(p)}<button>Sync now</button></form></div>`,
       ),
     );
-  });
+  }));
 
-  r.post("/portal/sync", async (req, res) => {
+  r.post("/portal/sync", wrap(async (req, res) => {
     const p = signedIn(req, res);
     if (!p) return;
     if (!p.isAdmin || !csrfOk(req)) return res.status(403).send("Forbidden");
     const results = await sync.run();
     back(res, "/admin", results.map((x) => `${x.connector}: ${x.ok ? "ok" : "failed"}`).join("; ") || "No connectors configured.");
+  }));
+
+  r.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    console.error(err);
+    res.status(500).send(page("Error", undefined, `<div class="card">Something went wrong. Try again.</div>`));
   });
 
   return r;

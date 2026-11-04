@@ -47,7 +47,7 @@ test("raise request → manager approval → Claude cap goes up immediately", as
   const dev = await Client.login(h.url, "dev@acme.io");
   const lead = await Client.login(h.url, "lead@acme.io");
   const mob = await Client.login(h.url, "mob@acme.io");
-  const sub = getUserByEmail(h.db, "dev@acme.io")!.oidc_sub!;
+  const sub = (await getUserByEmail(h.db, "dev@acme.io"))!.oidc_sub!;
 
   let res = await dev.post("/api/me/raise-requests", { amount_usd: 50, reason: "migration sprint" });
   assert.equal(res.status, 201);
@@ -84,7 +84,7 @@ test("validation errors come back as 400s with a message", async () => {
 });
 
 test("manually imported spend (a tool with no connector) shrinks the Claude cap", async () => {
-  const sub = getUserByEmail(h.db, "dev@acme.io")!.oidc_sub!;
+  const sub = (await getUserByEmail(h.db, "dev@acme.io"))!.oidc_sub!;
   const res = await admin(h.url, "POST", "/api/admin/spend-import", {
     tool: "codex",
     rows: [

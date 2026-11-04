@@ -1,7 +1,7 @@
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Config } from "./config.js";
-import type { Db } from "./db.js";
+import type { Queryable } from "./db.js";
 
 /**
  * Offline-verifiable license: a JSON payload signed with the vendor's Ed25519 key.
@@ -109,8 +109,8 @@ export function parseAndVerify(text: string): { ok: true; license: LicensePayloa
 }
 
 /** The license text in force: one uploaded by an admin, else DEVHUB_LICENSE, else the file at DEVHUB_LICENSE_FILE. */
-export function licenseText(db: Db, cfg: Config): string | null {
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'license'").get() as { value: string } | undefined;
+export async function licenseText(db: Queryable, cfg: Config): Promise<string | null> {
+  const row = await db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'license'");
   if (row) return row.value;
   if (cfg.license?.text) return cfg.license.text;
   if (cfg.license?.file) {
@@ -123,15 +123,13 @@ export function licenseText(db: Db, cfg: Config): string | null {
   return null;
 }
 
-export function activeUserCount(db: Db): number {
-  return Number(
-    (db.prepare("SELECT COUNT(*) AS n FROM users WHERE status = 'active' AND deleted_at IS NULL").get() as { n: number }).n,
-  );
+export async function activeUserCount(db: Queryable): Promise<number> {
+  return Number((await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM users WHERE status = 'active' AND deleted_at IS NULL"))!.n);
 }
 
-export function licenseStatus(db: Db, cfg: Config, now = Date.now()): LicenseStatus {
-  const activeUsers = activeUserCount(db);
-  const text = licenseText(db, cfg);
+export async function licenseStatus(db: Queryable, cfg: Config, now = Date.now()): Promise<LicenseStatus> {
+  const activeUsers = await activeUserCount(db);
+  const text = await licenseText(db, cfg);
   const evaluation = (state: LicenseStatus["state"], message: string): LicenseStatus => ({
     state,
     seats: EVALUATION_SEATS,
@@ -176,8 +174,8 @@ export function licenseStatus(db: Db, cfg: Config, now = Date.now()): LicenseSta
 export class LicenseLimitError extends Error {}
 
 /** Call before creating or reactivating `count` people. */
-export function assertCanActivate(db: Db, cfg: Config, count = 1): void {
-  const s = licenseStatus(db, cfg);
+export async function assertCanActivate(db: Queryable, cfg: Config, count = 1): Promise<void> {
+  const s = await licenseStatus(db, cfg);
   if (s.state === "expired") throw new LicenseLimitError(s.message);
   if (s.activeUsers + count > s.seatLimit) {
     throw new LicenseLimitError(

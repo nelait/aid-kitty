@@ -7,18 +7,21 @@ import { harness, type Harness } from "./helpers.js";
 let h: Harness;
 before(async () => {
   h = await harness();
-  h.db.exec(`INSERT INTO users (email, oidc_sub, github_login) VALUES
+  await h.db.exec(`INSERT INTO users (email, oidc_sub, github_login) VALUES
     ('ana@acme.io', 'okta|ana', 'Ana-GH'),
     ('ben@acme.io', 'okta|ben', NULL),
     ('cy@acme.io',  'okta|cy',  'cy-gh');`);
 });
 after(() => h.close());
 
-const spendOf = (email: string, tool: string) =>
+const spendOf = async (email: string, tool: string) =>
   (
-    h.db
-      .prepare("SELECT cents FROM spend WHERE period = ? AND tool = ? AND user_id = ?")
-      .get(currentPeriod(), tool, getUserByEmail(h.db, email)!.id) as { cents: number } | undefined
+    await h.db.get<{ cents: number }>(
+      "SELECT cents FROM spend WHERE period = ? AND tool = ? AND user_id = ?",
+      currentPeriod(),
+      tool,
+      (await getUserByEmail(h.db, email))!.id,
+    )
   )?.cents;
 
 test("pulls Claude and Copilot spend, matches identities, and records the rest as unmatched", async () => {
@@ -33,12 +36,12 @@ test("pulls Claude and Copilot spend, matches identities, and records the rest a
   const results = await h.sync.run();
   assert.ok(results.every((r) => r.ok), JSON.stringify(results));
 
-  assert.equal(spendOf("ana@acme.io", "claude"), 1234);
-  assert.equal(spendOf("ben@acme.io", "claude"), 500);
-  assert.equal(spendOf("ana@acme.io", "copilot"), 1900);
-  assert.equal(spendOf("cy@acme.io", "copilot"), 3900);
+  assert.equal(await spendOf("ana@acme.io", "claude"), 1234);
+  assert.equal(await spendOf("ben@acme.io", "claude"), 500);
+  assert.equal(await spendOf("ana@acme.io", "copilot"), 1900);
+  assert.equal(await spendOf("cy@acme.io", "copilot"), 3900);
 
-  const unmatched = h.db.prepare("SELECT tool, external_id, cents FROM unmatched_spend ORDER BY tool").all();
+  const unmatched = await h.db.all("SELECT tool, external_id, cents FROM unmatched_spend ORDER BY tool");
   assert.deepEqual(
     unmatched.map((r) => ({ ...r })),
     [
@@ -72,16 +75,16 @@ test("a vendor outage keeps the last known spend and does not touch caps", async
   h.claude.fail = false;
   assert.equal(results.find((r) => r.connector === "claude")!.ok, false);
   assert.match(results.find((r) => r.connector === "claude-caps")!.message, /skipped/);
-  assert.equal(spendOf("ana@acme.io", "claude"), 1234);
+  assert.equal(await spendOf("ana@acme.io", "claude"), 1234);
   assert.equal(h.claude.capWrites.length, before);
 });
 
 test("disabling a user drops their Claude cap to zero on the next sync", async () => {
   h.claude.spend.set("okta|ana", 1234.4);
-  h.db.prepare("UPDATE users SET status = 'disabled' WHERE email = 'ben@acme.io'").run();
+  await h.db.run("UPDATE users SET status = 'disabled' WHERE email = 'ben@acme.io'");
   await h.sync.run();
   assert.equal(h.claude.caps.get("okta|ben"), "0");
-  assert.equal(walletFor(h.db, h.cfg, getUserByEmail(h.db, "ben@acme.io")!).claudeCapCents, 0);
+  assert.equal((await walletFor(h.db, h.cfg, (await getUserByEmail(h.db, "ben@acme.io"))!)).claudeCapCents, 0);
 });
 
 test("concurrent sync calls share one run", async () => {

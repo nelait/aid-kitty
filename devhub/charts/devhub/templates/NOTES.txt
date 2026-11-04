@@ -9,6 +9,13 @@ OIDC redirect URI: {{ .Values.config.publicUrl }}/auth/callback
 WARNING: no secrets configured. Set secrets.existingSecret (or secrets.values) with at least
 OIDC_CLIENT_SECRET and DEVHUB_ADMIN_TOKEN, plus the connector credentials you use.
 {{- end }}
+{{- if eq .Values.database.type "postgres" }}
+
+Database: Postgres from DATABASE_URL in the Secret, {{ .Values.replicaCount }} replica(s).
+{{- else }}
+
+Database: SQLite on a persistent volume (one replica). Back up the volume.
+{{- end }}
 {{- if .Values.config.auth.devLogin }}
 
 WARNING: config.auth.devLogin is true. Anyone can sign in as any email. Turn it off.

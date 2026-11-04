@@ -40,9 +40,10 @@ function readCookie(req: Request, name: string): string | undefined {
   return undefined;
 }
 
-export function createSession(db: Db, cfg: Config, res: Response, user: User): void {
+export async function createSession(db: Db, cfg: Config, res: Response, user: User): Promise<void> {
   const token = randomToken();
-  db.prepare("INSERT INTO web_sessions (token_hash, user_id, csrf, expires_at) VALUES (?, ?, ?, ?)").run(
+  await db.run(
+    "INSERT INTO web_sessions (token_hash, user_id, csrf, expires_at) VALUES (?, ?, ?, ?)",
     sha256(token),
     user.id,
     randomToken(16),
@@ -57,25 +58,30 @@ export function createSession(db: Db, cfg: Config, res: Response, user: User): v
 
 /** Resolves the caller from the session cookie or the automation bearer token. Never rejects. */
 export function identify(db: Db, cfg: Config) {
-  return (req: Request, _res: Response, next: NextFunction) => {
+  return async (req: Request, _res: Response, next: NextFunction) => {
     const bearer = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
     if (bearer && cfg.adminToken && safeEqual(bearer, cfg.adminToken)) {
       req.principal = { user: null, isAdmin: true, csrf: null, label: "admin-token" };
       return next();
     }
     const token = readCookie(req, COOKIE);
-    if (token) {
-      const s = db
-        .prepare("SELECT user_id, csrf, expires_at FROM web_sessions WHERE token_hash = ?")
-        .get(sha256(token)) as { user_id: number; csrf: string; expires_at: string } | undefined;
-      if (s && s.expires_at > nowIso()) {
-        const user = getUser(db, s.user_id);
-        if (user && user.status === "active") {
-          req.principal = { user, isAdmin: user.role === "admin", csrf: s.csrf, label: user.email };
+    try {
+      if (token) {
+        const s = await db.get<{ user_id: number; csrf: string; expires_at: string }>(
+          "SELECT user_id, csrf, expires_at FROM web_sessions WHERE token_hash = ?",
+          sha256(token),
+        );
+        if (s && s.expires_at > nowIso()) {
+          const user = await getUser(db, s.user_id);
+          if (user && user.status === "active") {
+            req.principal = { user, isAdmin: user.role === "admin", csrf: s.csrf, label: user.email };
+          }
         }
       }
+      next();
+    } catch (e) {
+      next(e);
     }
-    next();
   };
 }
 
@@ -112,47 +118,48 @@ function emailAllowed(cfg: Config, email: string): boolean {
 }
 
 /** Find or create the user for an SSO identity; links an admin-created user by email on first login. */
-export function upsertSsoUser(
+export async function upsertSsoUser(
   db: Db,
   cfg: Config,
   claims: { sub: string; email: string; name?: string; groups?: string[] },
-): User | { error: string } {
+): Promise<User | { error: string }> {
+  claims = { ...claims, email: claims.email.toLowerCase() };
   if (!emailAllowed(cfg, claims.email)) return { error: "email domain not allowed" };
   let user =
-    (db.prepare("SELECT * FROM users WHERE oidc_sub = ?").get(claims.sub) as User | undefined) ??
-    getUserByEmail(db, claims.email);
+    (await db.get<User>("SELECT * FROM users WHERE oidc_sub = ?", claims.sub)) ?? (await getUserByEmail(db, claims.email));
   const groups = claims.groups ?? [];
   const adminGroup = cfg.auth.oidc?.adminGroup;
   if (!user) {
     if (!cfg.auth.jitProvisioning) return { error: "no Dev Hub account; ask an admin to add you" };
     try {
-      assertCanActivate(db, cfg);
+      user = await db.tx(async (q) => {
+        await assertCanActivate(q, cfg);
+        const team = groups.length
+          ? await q.get<{ id: number }>(`SELECT id FROM teams WHERE name IN (${groups.map(() => "?").join(",")}) ORDER BY id LIMIT 1`, ...groups)
+          : undefined;
+        await q.run(
+          "INSERT INTO users (email, name, oidc_sub, team_id, role) VALUES (?, ?, ?, ?, ?)",
+          claims.email,
+          claims.name ?? null,
+          claims.sub,
+          team?.id ?? null,
+          adminGroup && groups.includes(adminGroup) ? "admin" : "member",
+        );
+        await audit(q, claims.email, "user.jit_created", { sub: claims.sub, team: team?.id ?? null });
+        return (await getUserByEmail(q, claims.email))!;
+      });
     } catch (e) {
       if (e instanceof LicenseLimitError) return { error: `can't create your account: ${e.message}` };
       throw e;
     }
-    const team = groups.length
-      ? (db
-          .prepare(`SELECT id FROM teams WHERE name IN (${groups.map(() => "?").join(",")}) ORDER BY id LIMIT 1`)
-          .get(...groups) as { id: number } | undefined)
-      : undefined;
-    db.prepare("INSERT INTO users (email, name, oidc_sub, team_id, role) VALUES (?, ?, ?, ?, ?)").run(
-      claims.email,
-      claims.name ?? null,
-      claims.sub,
-      team?.id ?? null,
-      adminGroup && groups.includes(adminGroup) ? "admin" : "member",
-    );
-    user = getUserByEmail(db, claims.email)!;
-    audit(db, claims.email, "user.jit_created", { sub: claims.sub, team: team?.id ?? null });
   } else {
     if (user.status !== "active") return { error: "account disabled" };
-    if (!user.oidc_sub) db.prepare("UPDATE users SET oidc_sub = ? WHERE id = ?").run(claims.sub, user.id);
+    if (!user.oidc_sub) await db.run("UPDATE users SET oidc_sub = ? WHERE id = ?", claims.sub, user.id);
     else if (user.oidc_sub !== claims.sub) return { error: "this email is linked to a different SSO identity" };
     if (adminGroup && groups.includes(adminGroup) && user.role !== "admin") {
-      db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
+      await db.run("UPDATE users SET role = 'admin' WHERE id = ?", user.id);
     }
-    user = getUser(db, user.id)!;
+    user = (await getUser(db, user.id))!;
   }
   return user;
 }
@@ -270,32 +277,40 @@ export function authRoutes(db: Db, cfg: Config): Router {
     if (typeof req.query.error === "string") return res.status(401).send(`Sign-in failed: ${req.query.error}`);
     try {
       const { payload, returnTo } = await oidc.callback(String(req.query.code ?? ""), String(req.query.state ?? ""));
-      const result = upsertSsoUser(db, cfg, oidc.claims(payload));
+      const result = await upsertSsoUser(db, cfg, oidc.claims(payload));
       if ("error" in result) return res.status(403).send(`Sign-in refused: ${result.error}`);
-      createSession(db, cfg, res, result);
-      audit(db, result.email, "auth.login", { method: "oidc" });
+      await createSession(db, cfg, res, result);
+      await audit(db, result.email, "auth.login", { method: "oidc" });
       res.redirect(returnTo);
     } catch (e) {
       res.status(401).send(`Sign-in failed: ${(e as Error).message}`);
     }
   });
 
-  r.post("/auth/dev-login", express.urlencoded({ extended: false }), (req, res) => {
+  r.post("/auth/dev-login", express.urlencoded({ extended: false }), async (req, res, next) => {
+   try {
     if (!cfg.auth.devLogin) return res.status(404).send("dev login is disabled");
     const email = String(req.body.email ?? "").trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+$/.test(email)) return res.status(400).send("enter an email address");
-    const result = upsertSsoUser(db, cfg, { sub: `dev|${email}`, email });
+    const result = await upsertSsoUser(db, cfg, { sub: `dev|${email}`, email });
     if ("error" in result) return res.status(403).send(result.error);
-    createSession(db, cfg, res, result);
-    audit(db, email, "auth.login", { method: "dev" });
+    await createSession(db, cfg, res, result);
+    await audit(db, email, "auth.login", { method: "dev" });
     res.redirect("/");
+   } catch (e) {
+    next(e);
+   }
   });
 
-  r.post("/auth/logout", express.urlencoded({ extended: false }), (req, res) => {
-    const token = readCookie(req, COOKIE);
-    if (token) db.prepare("DELETE FROM web_sessions WHERE token_hash = ?").run(sha256(token));
-    res.setHeader("Set-Cookie", `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
-    res.redirect("/");
+  r.post("/auth/logout", express.urlencoded({ extended: false }), async (req, res, next) => {
+    try {
+      const token = readCookie(req, COOKIE);
+      if (token) await db.run("DELETE FROM web_sessions WHERE token_hash = ?", sha256(token));
+      res.setHeader("Set-Cookie", `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+      res.redirect("/");
+    } catch (e) {
+      next(e);
+    }
   });
 
   return r;

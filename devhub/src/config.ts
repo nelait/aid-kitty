@@ -44,7 +44,10 @@ export interface CursorConnectorConfig {
 export interface Config {
   port: number;
   publicUrl: string;
+  /** SQLite file path. Ignored when databaseUrl is set. */
   databasePath: string;
+  /** postgres://user:pass@host:5432/db — use Postgres instead of SQLite (needed for more than one replica). */
+  databaseUrl?: string;
   /** Bearer token for automation (Terraform, scripts). Acts as an admin. */
   adminToken?: string;
   /** Bearer token the IdP uses for SCIM provisioning at /scim/v2. SCIM is off when unset. */
@@ -93,6 +96,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     port: num(env.PORT, 8787),
     publicUrl: env.DEVHUB_PUBLIC_URL ?? "http://localhost:8787",
     databasePath: env.DEVHUB_DB ?? "devhub.db",
+    databaseUrl: env.DATABASE_URL || undefined,
     adminToken: env.DEVHUB_ADMIN_TOKEN,
     scimToken: env.DEVHUB_SCIM_TOKEN,
     license: { file: env.DEVHUB_LICENSE_FILE, text: env.DEVHUB_LICENSE },

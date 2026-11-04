@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Config } from "../config.js";
-import { audit, getUser, nowIso, tx, type Db, type Team, type User } from "../db.js";
+import { audit, getUser, insertId, nowIso, type Db, type Param, type Queryable, type Team, type User } from "../db.js";
 import { assertCanActivate, LicenseLimitError } from "../license.js";
 import type { SyncService } from "../sync.js";
 
@@ -78,8 +78,8 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
   r.use(express.json({ type: ["application/json", CT], limit: "1mb" }));
 
   // ---------- representation ----------
-  const userResource = (u: User) => {
-    const team = u.team_id !== null ? (db.prepare("SELECT id, name FROM teams WHERE id = ?").get(u.team_id) as { id: number; name: string } | undefined) : undefined;
+  const userResource = async (u: User) => {
+    const team = u.team_id !== null ? await db.get<{ id: number; name: string }>("SELECT id, name FROM teams WHERE id = ?", u.team_id) : undefined;
     return {
       schemas: [SCHEMA.user],
       id: String(u.id),
@@ -94,29 +94,31 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
     };
   };
 
-  const groupResource = (t: Team, withMembers = true) => ({
+  const groupResource = async (t: Team, withMembers = true) => ({
     schemas: [SCHEMA.group],
     id: String(t.id),
     externalId: t.scim_external_id ?? undefined,
     displayName: t.name,
     members: withMembers
-      ? (db.prepare("SELECT id, email FROM users WHERE team_id = ? AND deleted_at IS NULL ORDER BY id").all(t.id) as { id: number; email: string }[]).map(
+      ? (await db.all<{ id: number; email: string }>("SELECT id, email FROM users WHERE team_id = ? AND deleted_at IS NULL ORDER BY id", t.id)).map(
           (m) => ({ value: String(m.id), display: m.email, $ref: `${base()}/Users/${m.id}` }),
         )
       : undefined,
     meta: { resourceType: "Group", location: `${base()}/Groups/${t.id}` },
   });
 
-  const liveUser = (id: string): User => {
-    const u = /^\d+$/.test(id) ? getUser(db, Number(id)) : undefined;
+  const liveUser = async (q: Queryable, id: string): Promise<User> => {
+    const u = /^\d+$/.test(id) ? await getUser(q, Number(id)) : undefined;
     if (!u || u.deleted_at) throw new ScimError(404, `User ${id} not found`);
     return u;
   };
-  const team = (id: string): Team => {
-    const t = /^\d+$/.test(id) ? (db.prepare("SELECT * FROM teams WHERE id = ?").get(Number(id)) as Team | undefined) : undefined;
+  const team = async (id: string): Promise<Team> => {
+    const t = /^\d+$/.test(id) ? await db.get<Team>("SELECT * FROM teams WHERE id = ?", Number(id)) : undefined;
     if (!t) throw new ScimError(404, `Group ${id} not found`);
     return t;
   };
+  const memberIdsOf = async (teamId: number) =>
+    (await db.all<{ id: number }>("SELECT id FROM users WHERE team_id = ?", teamId)).map((x) => String(x.id));
 
   // ---------- user writes ----------
   interface UserFields {
@@ -143,35 +145,35 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
     throw new ScimError(400, "active must be a boolean", "invalidValue");
   }
 
-  /** Apply fields to a user; returns whether anything that affects caps changed. */
-  function applyUser(u: User, f: UserFields): boolean {
-    const sets: [string, string | null][] = [];
+  const checkSeat = async (q: Queryable) => {
+    try {
+      await assertCanActivate(q, cfg);
+    } catch (e) {
+      if (e instanceof LicenseLimitError) throw new ScimError(403, e.message);
+      throw e;
+    }
+  };
+
+  /** Apply fields to a user; returns whether their status changed (which moves caps). */
+  async function applyUser(q: Queryable, u: User, f: UserFields): Promise<boolean> {
+    const sets: [string, Param][] = [];
     if (f.email !== undefined && f.email !== u.email) {
-      const other = db.prepare("SELECT id FROM users WHERE email = ? AND id != ?").get(f.email, u.id);
+      const other = await q.get("SELECT id FROM users WHERE email = ? AND id != ?", f.email, u.id);
       if (other) throw new ScimError(409, `userName ${f.email} is already taken`, "uniqueness");
       sets.push(["email", f.email]);
     }
     if (f.name !== undefined && f.name !== u.name) sets.push(["name", f.name]);
     if (f.externalId !== undefined && f.externalId !== u.scim_external_id) sets.push(["scim_external_id", f.externalId]);
     const status = f.active === undefined ? u.status : f.active ? "active" : "disabled";
-    if ((status === "active" && u.status !== "active") || (status === "active" && u.deleted_at)) checkSeat();
+    if (status === "active" && (u.status !== "active" || u.deleted_at)) await checkSeat(q);
     if (status !== u.status) sets.push(["status", status]);
     if (sets.length) {
-      db.prepare(`UPDATE users SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...sets.map(([, v]) => v), u.id);
-      audit(db, "scim", "scim.user.updated", { id: u.id, ...Object.fromEntries(sets) });
+      await q.run(`UPDATE users SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`, ...sets.map(([, v]) => v), u.id);
+      await audit(q, "scim", "scim.user.updated", { id: u.id, ...Object.fromEntries(sets) });
     }
-    if (status === "disabled") db.prepare("DELETE FROM web_sessions WHERE user_id = ?").run(u.id);
+    if (status === "disabled") await q.run("DELETE FROM web_sessions WHERE user_id = ?", u.id);
     return status !== u.status;
   }
-
-  const checkSeat = () => {
-    try {
-      assertCanActivate(db, cfg);
-    } catch (e) {
-      if (e instanceof LicenseLimitError) throw new ScimError(403, e.message);
-      throw e;
-    }
-  };
 
   const afterStatusChange = async (userId: number) => {
     await sync.pushCaps([userId]).catch((e) => console.error("cap push after SCIM change failed:", e));
@@ -204,118 +206,127 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
   // ---------- Users ----------
   r.get(
     "/Users",
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const f = parseFilter(req.query.filter, { username: "email", externalid: "scim_external_id", "emails.value": "email" });
       const { startIndex, count } = paging(req);
       const where = `deleted_at IS NULL${f ? ` AND ${f.column} = ?` : ""}`;
       const args = f ? [f.column === "email" ? f.value.toLowerCase() : f.value] : [];
-      const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM users WHERE ${where}`).get(...args) as { n: number }).n);
-      const rows = db
-        .prepare(`SELECT * FROM users WHERE ${where} ORDER BY id LIMIT ? OFFSET ?`)
-        .all(...args, count, startIndex - 1) as unknown as User[];
-      send(res, 200, { schemas: [SCHEMA.list], totalResults: total, startIndex, itemsPerPage: rows.length, Resources: rows.map(userResource) });
+      const total = Number((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM users WHERE ${where}`, ...args))!.n);
+      const rows = await db.all<User>(`SELECT * FROM users WHERE ${where} ORDER BY id LIMIT ? OFFSET ?`, ...args, count, startIndex - 1);
+      const resources = [];
+      for (const u of rows) resources.push(await userResource(u));
+      send(res, 200, { schemas: [SCHEMA.list], totalResults: total, startIndex, itemsPerPage: rows.length, Resources: resources });
     }),
   );
 
-  r.get("/Users/:id", wrap((req, res) => send(res, 200, userResource(liveUser(req.params.id)))));
+  r.get("/Users/:id", wrap(async (req, res) => send(res, 200, await userResource(await liveUser(db, req.params.id)))));
 
   r.post(
     "/Users",
     wrap(async (req, res) => {
       const f = userFields(req.body ?? {});
-      const existing = db.prepare("SELECT * FROM users WHERE email = ?").get(f.email!) as User | undefined;
-      let user: User;
-      if (existing && !existing.deleted_at && existing.scim_external_id && existing.scim_external_id !== f.externalId) {
-        throw new ScimError(409, `userName ${f.email} already exists`, "uniqueness");
-      }
-      if (existing) {
-        // Adopt a user an admin created by hand, or bring back one the IdP deleted earlier.
-        applyUser(existing, f);
-        db.prepare("UPDATE users SET deleted_at = NULL WHERE id = ?").run(existing.id);
-        user = getUser(db, existing.id)!;
-        audit(db, "scim", "scim.user.linked", { id: user.id, email: user.email });
-      } else {
-        if (f.active !== false) checkSeat();
-        const info = db
-          .prepare("INSERT INTO users (email, name, status, scim_external_id) VALUES (?, ?, ?, ?)")
-          .run(f.email!, f.name ?? null, f.active === false ? "disabled" : "active", f.externalId ?? null);
-        user = getUser(db, Number(info.lastInsertRowid))!;
-        audit(db, "scim", "scim.user.created", { id: user.id, email: user.email });
-      }
+      const user = await db.tx(async (q) => {
+        const existing = await q.get<User>("SELECT * FROM users WHERE email = ?", f.email!);
+        if (existing && !existing.deleted_at && existing.scim_external_id && existing.scim_external_id !== f.externalId) {
+          throw new ScimError(409, `userName ${f.email} already exists`, "uniqueness");
+        }
+        if (existing) {
+          // Adopt a user an admin created by hand, or bring back one the IdP deleted earlier.
+          await applyUser(q, existing, f);
+          await q.run("UPDATE users SET deleted_at = NULL WHERE id = ?", existing.id);
+          await audit(q, "scim", "scim.user.linked", { id: existing.id, email: existing.email });
+          return (await getUser(q, existing.id))!;
+        }
+        if (f.active !== false) await checkSeat(q);
+        const id = await insertId(
+          q,
+          "INSERT INTO users (email, name, status, scim_external_id) VALUES (?, ?, ?, ?)",
+          f.email!,
+          f.name ?? null,
+          f.active === false ? "disabled" : "active",
+          f.externalId ?? null,
+        );
+        await audit(q, "scim", "scim.user.created", { id, email: f.email });
+        return (await getUser(q, id))!;
+      });
       await afterStatusChange(user.id);
-      send(res, 201, userResource(user));
+      send(res, 201, await userResource(user));
     }),
   );
 
   r.put(
     "/Users/:id",
     wrap(async (req, res) => {
-      const u = liveUser(req.params.id);
-      if (applyUser(u, userFields(req.body ?? {}))) await afterStatusChange(u.id);
-      send(res, 200, userResource(getUser(db, u.id)!));
+      const f = userFields(req.body ?? {});
+      const { id, changed } = await db.tx(async (q) => {
+        const u = await liveUser(q, req.params.id);
+        return { id: u.id, changed: await applyUser(q, u, f) };
+      });
+      if (changed) await afterStatusChange(id);
+      send(res, 200, await userResource((await getUser(db, id))!));
     }),
   );
 
   r.patch(
     "/Users/:id",
     wrap(async (req, res) => {
-      const u = liveUser(req.params.id);
       const ops = patchOps(req.body);
-      const f: UserFields = {};
-      for (const op of ops) {
-        if (op.op === "remove") throw new ScimError(400, "remove is not supported on Users", "mutability");
-        // Okta sends {op, value: {active: false}}; Entra sends {op, path: "active", value: "False"}.
-        const entries: [string, unknown][] = op.path ? [[op.path, op.value]] : Object.entries(op.value ?? {});
-        for (const [rawPath, value] of entries) {
-          const path = rawPath.toLowerCase();
-          if (path === "active") f.active = toBool(value);
-          else if (path === "username" || /^emails(\[.*\])?(\.value)?$/.test(path)) {
-            const v = Array.isArray(value) ? (value.find((e: any) => e?.primary) ?? value[0])?.value : value;
-            const email = String(v ?? "").toLowerCase();
-            if (!EMAIL_RE.test(email)) throw new ScimError(400, "userName must be an email address", "invalidValue");
-            f.email = email;
-          } else if (path === "externalid") f.externalId = value == null ? null : String(value);
-          else if (path === "displayname" || path === "name.formatted") f.name = value == null ? null : String(value);
-          else if (path === "name.givenname" || path === "name.familyname" || path === "name") {
-            const cur = splitName(f.name ?? getUser(db, u.id)!.name);
-            const n = path === "name" ? (value as any) ?? {} : { [path.slice(5) === "givenname" ? "givenName" : "familyName"]: value };
-            f.name = [n.givenName ?? cur.givenName, n.familyName ?? cur.familyName].filter(Boolean).join(" ") || null;
+      const { id, changed } = await db.tx(async (q) => {
+        const u = await liveUser(q, req.params.id);
+        const f: UserFields = {};
+        for (const op of ops) {
+          if (op.op === "remove") throw new ScimError(400, "remove is not supported on Users", "mutability");
+          // Okta sends {op, value: {active: false}}; Entra sends {op, path: "active", value: "False"}.
+          const entries: [string, unknown][] = op.path ? [[op.path, op.value]] : Object.entries(op.value ?? {});
+          for (const [rawPath, value] of entries) {
+            const path = rawPath.toLowerCase();
+            if (path === "active") f.active = toBool(value);
+            else if (path === "username" || /^emails(\[.*\])?(\.value)?$/.test(path)) {
+              const v = Array.isArray(value) ? (value.find((e: any) => e?.primary) ?? value[0])?.value : value;
+              const email = String(v ?? "").toLowerCase();
+              if (!EMAIL_RE.test(email)) throw new ScimError(400, "userName must be an email address", "invalidValue");
+              f.email = email;
+            } else if (path === "externalid") f.externalId = value == null ? null : String(value);
+            else if (path === "displayname" || path === "name.formatted") f.name = value == null ? null : String(value);
+            else if (path === "name.givenname" || path === "name.familyname" || path === "name") {
+              const cur = splitName(f.name ?? u.name);
+              const n = path === "name" ? ((value as any) ?? {}) : { [path === "name.givenname" ? "givenName" : "familyName"]: value };
+              f.name = [n.givenName ?? cur.givenName, n.familyName ?? cur.familyName].filter(Boolean).join(" ") || null;
+            }
+            // Other attributes (title, phone numbers, enterprise extension) are accepted and ignored.
           }
-          // Other attributes (title, phone numbers, enterprise extension) are accepted and ignored.
         }
-      }
-      if (applyUser(u, f)) await afterStatusChange(u.id);
-      send(res, 200, userResource(getUser(db, u.id)!));
+        return { id: u.id, changed: await applyUser(q, u, f) };
+      });
+      if (changed) await afterStatusChange(id);
+      send(res, 200, await userResource((await getUser(db, id))!));
     }),
   );
 
   r.delete(
     "/Users/:id",
     wrap(async (req, res) => {
-      const u = liveUser(req.params.id);
-      db.prepare("UPDATE users SET status = 'disabled', deleted_at = ? WHERE id = ?").run(nowIso(), u.id);
-      db.prepare("DELETE FROM web_sessions WHERE user_id = ?").run(u.id);
-      audit(db, "scim", "scim.user.deleted", { id: u.id, email: u.email });
+      const u = await liveUser(db, req.params.id);
+      await db.tx(async (q) => {
+        await q.run("UPDATE users SET status = 'disabled', deleted_at = ? WHERE id = ?", nowIso(), u.id);
+        await q.run("DELETE FROM web_sessions WHERE user_id = ?", u.id);
+        await audit(q, "scim", "scim.user.deleted", { id: u.id, email: u.email });
+      });
       await afterStatusChange(u.id);
       res.status(204).end();
     }),
   );
 
   // ---------- Groups (= teams) ----------
-  const setMembers = (t: Team, ids: string[], mode: "add" | "remove" | "replace") => {
-    const users = ids.map((id) => liveUser(id));
-    tx(db, () => {
-      if (mode === "replace") db.prepare("UPDATE users SET team_id = NULL WHERE team_id = ?").run(t.id);
-      const stmt =
-        mode === "remove"
-          ? db.prepare("UPDATE users SET team_id = NULL WHERE id = ? AND team_id = ?")
-          : db.prepare("UPDATE users SET team_id = ? WHERE id = ?");
-      for (const u of users) {
-        if (mode === "remove") stmt.run(u.id, t.id);
-        else stmt.run(t.id, u.id);
-      }
-    });
-    audit(db, "scim", `scim.group.members.${mode}`, { team: t.name, users: users.map((u) => u.email) });
+  const setMembers = async (q: Queryable, t: Team, ids: string[], mode: "add" | "remove" | "replace") => {
+    const users: User[] = [];
+    for (const id of ids) users.push(await liveUser(q, id));
+    if (mode === "replace") await q.run("UPDATE users SET team_id = NULL WHERE team_id = ?", t.id);
+    for (const u of users) {
+      if (mode === "remove") await q.run("UPDATE users SET team_id = NULL WHERE id = ? AND team_id = ?", u.id, t.id);
+      else await q.run("UPDATE users SET team_id = ? WHERE id = ?", t.id, u.id);
+    }
+    await audit(q, "scim", `scim.group.members.${mode}`, { team: t.name, users: users.map((u) => u.email) });
   };
 
   const memberIds = (v: unknown): string[] =>
@@ -324,134 +335,135 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
       return String(m.value);
     });
 
-  const renameTeam = (t: Team, name: unknown) => {
+  const renameTeam = async (q: Queryable, t: Team, name: unknown) => {
     const n = String(name ?? "").trim();
     if (!n) throw new ScimError(400, "displayName is required", "invalidValue");
     if (n === t.name) return;
-    if (db.prepare("SELECT id FROM teams WHERE name = ? AND id != ?").get(n, t.id)) {
+    if (await q.get("SELECT id FROM teams WHERE name = ? AND id != ?", n, t.id)) {
       throw new ScimError(409, `a team named ${n} already exists`, "uniqueness");
     }
-    db.prepare("UPDATE teams SET name = ? WHERE id = ?").run(n, t.id);
-    audit(db, "scim", "scim.group.renamed", { id: t.id, from: t.name, to: n });
+    await q.run("UPDATE teams SET name = ? WHERE id = ?", n, t.id);
+    await audit(q, "scim", "scim.group.renamed", { id: t.id, from: t.name, to: n });
   };
 
   // A team change can move someone into or out of a team pool; re-check caps for everyone affected.
   const pushTeamCaps = async (teamId: number, extra: string[] = []) => {
-    const ids = (db.prepare("SELECT id FROM users WHERE team_id = ?").all(teamId) as { id: number }[]).map((x) => x.id);
-    await sync.pushCaps([...ids, ...extra.map(Number)]).catch((e) => console.error("cap push after SCIM group change failed:", e));
+    const ids = [...(await memberIdsOf(teamId)), ...extra].map(Number);
+    await sync.pushCaps([...new Set(ids)]).catch((e) => console.error("cap push after SCIM group change failed:", e));
   };
 
   r.get(
     "/Groups",
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const f = parseFilter(req.query.filter, { displayname: "name", externalid: "scim_external_id" });
       const { startIndex, count } = paging(req);
       const where = f ? `WHERE ${f.column} = ?` : "";
       const args = f ? [f.value] : [];
-      const total = Number((db.prepare(`SELECT COUNT(*) AS n FROM teams ${where}`).get(...args) as { n: number }).n);
-      const rows = db.prepare(`SELECT * FROM teams ${where} ORDER BY id LIMIT ? OFFSET ?`).all(...args, count, startIndex - 1) as unknown as Team[];
+      const total = Number((await db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM teams ${where}`, ...args))!.n);
+      const rows = await db.all<Team>(`SELECT * FROM teams ${where} ORDER BY id LIMIT ? OFFSET ?`, ...args, count, startIndex - 1);
       const withMembers = !/members/.test(String(req.query.excludedAttributes ?? ""));
-      send(res, 200, {
-        schemas: [SCHEMA.list],
-        totalResults: total,
-        startIndex,
-        itemsPerPage: rows.length,
-        Resources: rows.map((t) => groupResource(t, withMembers)),
-      });
+      const resources = [];
+      for (const t of rows) resources.push(await groupResource(t, withMembers));
+      send(res, 200, { schemas: [SCHEMA.list], totalResults: total, startIndex, itemsPerPage: rows.length, Resources: resources });
     }),
   );
 
-  r.get("/Groups/:id", wrap((req, res) => send(res, 200, groupResource(team(req.params.id)))));
+  r.get("/Groups/:id", wrap(async (req, res) => send(res, 200, await groupResource(await team(req.params.id)))));
 
   r.post(
     "/Groups",
     wrap(async (req, res) => {
       const name = String(req.body?.displayName ?? "").trim();
       if (!name) throw new ScimError(400, "displayName is required", "invalidValue");
-      let t = db.prepare("SELECT * FROM teams WHERE name = ?").get(name) as Team | undefined;
-      if (t?.scim_external_id && req.body.externalId && t.scim_external_id !== req.body.externalId) {
-        throw new ScimError(409, `group ${name} already exists`, "uniqueness");
-      }
-      if (t) {
-        // Link a team an admin created by hand (keeps its cost center and budgets).
-        db.prepare("UPDATE teams SET scim_external_id = ? WHERE id = ?").run(req.body.externalId ?? null, t.id);
-      } else {
-        const info = db.prepare("INSERT INTO teams (name, scim_external_id) VALUES (?, ?)").run(name, req.body.externalId ?? null);
-        t = db.prepare("SELECT * FROM teams WHERE id = ?").get(Number(info.lastInsertRowid)) as unknown as Team;
-      }
-      audit(db, "scim", "scim.group.created", { id: t.id, name });
       const ids = memberIds(req.body.members);
-      if (ids.length) setMembers(t, ids, "add");
-      await pushTeamCaps(t.id);
-      send(res, 201, groupResource(team(String(t.id))));
+      const teamId = await db.tx(async (q) => {
+        let t = await q.get<Team>("SELECT * FROM teams WHERE name = ?", name);
+        if (t?.scim_external_id && req.body.externalId && t.scim_external_id !== req.body.externalId) {
+          throw new ScimError(409, `group ${name} already exists`, "uniqueness");
+        }
+        if (t) {
+          // Link a team an admin created by hand (keeps its cost center and budgets).
+          await q.run("UPDATE teams SET scim_external_id = ? WHERE id = ?", req.body.externalId ?? null, t.id);
+        } else {
+          const id = await insertId(q, "INSERT INTO teams (name, scim_external_id) VALUES (?, ?)", name, req.body.externalId ?? null);
+          t = (await q.get<Team>("SELECT * FROM teams WHERE id = ?", id))!;
+        }
+        await audit(q, "scim", "scim.group.created", { id: t.id, name });
+        if (ids.length) await setMembers(q, t, ids, "add");
+        return t.id;
+      });
+      await pushTeamCaps(teamId);
+      send(res, 201, await groupResource(await team(String(teamId))));
     }),
   );
 
   r.put(
     "/Groups/:id",
     wrap(async (req, res) => {
-      const t = team(req.params.id);
-      const before = (db.prepare("SELECT id FROM users WHERE team_id = ?").all(t.id) as { id: number }[]).map((x) => String(x.id));
-      renameTeam(t, req.body?.displayName);
-      if (req.body?.members !== undefined) setMembers(t, memberIds(req.body.members), "replace");
+      const t = await team(req.params.id);
+      const before = await memberIdsOf(t.id);
+      await db.tx(async (q) => {
+        await renameTeam(q, t, req.body?.displayName);
+        if (req.body?.members !== undefined) await setMembers(q, t, memberIds(req.body.members), "replace");
+      });
       await pushTeamCaps(t.id, before);
-      send(res, 200, groupResource(team(req.params.id)));
+      send(res, 200, await groupResource(await team(req.params.id)));
     }),
   );
 
   r.patch(
     "/Groups/:id",
     wrap(async (req, res) => {
-      const t = team(req.params.id);
-      const touched: string[] = [];
-      for (const op of patchOps(req.body)) {
-        const path = (op.path ?? "").toLowerCase();
-        if (op.op === "remove" && path.startsWith("members")) {
-          // Okta: path `members[value eq "42"]`; others: path `members` + value list.
-          const m = op.path!.match(/^members\[value eq "([^"]+)"\]$/i);
-          const ids = m ? [m[1]] : memberIds(op.value);
-          if (!ids.length) {
-            touched.push(...(db.prepare("SELECT id FROM users WHERE team_id = ?").all(t.id) as { id: number }[]).map((x) => String(x.id)));
-            db.prepare("UPDATE users SET team_id = NULL WHERE team_id = ?").run(t.id);
-          } else {
-            setMembers(t, ids, "remove");
+      const t = await team(req.params.id);
+      const ops = patchOps(req.body);
+      const touched = await memberIdsOf(t.id);
+      await db.tx(async (q) => {
+        for (const op of ops) {
+          const path = (op.path ?? "").toLowerCase();
+          if (op.op === "remove" && path.startsWith("members")) {
+            // Okta: path `members[value eq "42"]`; others: path `members` + value list.
+            const m = op.path!.match(/^members\[value eq "([^"]+)"\]$/i);
+            const ids = m ? [m[1]] : memberIds(op.value);
+            if (!ids.length) await q.run("UPDATE users SET team_id = NULL WHERE team_id = ?", t.id);
+            else {
+              await setMembers(q, t, ids, "remove");
+              touched.push(...ids);
+            }
+          } else if ((op.op === "add" || op.op === "replace") && path === "members") {
+            const ids = memberIds(op.value);
+            await setMembers(q, t, ids, op.op);
             touched.push(...ids);
+          } else if (op.op !== "remove" && (path === "displayname" || path === "")) {
+            const v = path === "" ? (op.value as any)?.displayName : op.value;
+            if (v !== undefined) await renameTeam(q, (await q.get<Team>("SELECT * FROM teams WHERE id = ?", t.id))!, v);
+            if (path === "" && (op.value as any)?.members !== undefined) {
+              const ids = memberIds((op.value as any).members);
+              await setMembers(q, t, ids, op.op === "add" ? "add" : "replace");
+              touched.push(...ids);
+            }
+          } else if (path === "externalid") {
+            await q.run("UPDATE teams SET scim_external_id = ? WHERE id = ?", op.op === "remove" ? null : String(op.value), t.id);
+          } else {
+            throw new ScimError(400, `unsupported PATCH ${op.op} ${op.path ?? ""}`, "invalidPath");
           }
-        } else if ((op.op === "add" || op.op === "replace") && path === "members") {
-          const ids = memberIds(op.value);
-          if (op.op === "replace") {
-            touched.push(...(db.prepare("SELECT id FROM users WHERE team_id = ?").all(t.id) as { id: number }[]).map((x) => String(x.id)));
-          }
-          setMembers(t, ids, op.op);
-          touched.push(...ids);
-        } else if (op.op !== "remove" && (path === "displayname" || path === "")) {
-          const v = path === "" ? (op.value as any)?.displayName : op.value;
-          if (v !== undefined) renameTeam(team(req.params.id), v);
-          if (path === "" && (op.value as any)?.members !== undefined) {
-            setMembers(t, memberIds((op.value as any).members), op.op === "add" ? "add" : "replace");
-          }
-        } else if (path === "externalid") {
-          db.prepare("UPDATE teams SET scim_external_id = ? WHERE id = ?").run(op.op === "remove" ? null : String(op.value), t.id);
-        } else {
-          throw new ScimError(400, `unsupported PATCH ${op.op} ${op.path ?? ""}`, "invalidPath");
         }
-      }
+      });
       await pushTeamCaps(t.id, touched);
       // Okta accepts 204; returning the group helps other IdPs.
-      send(res, 200, groupResource(team(req.params.id)));
+      send(res, 200, await groupResource(await team(req.params.id)));
     }),
   );
 
   r.delete(
     "/Groups/:id",
     wrap(async (req, res) => {
-      const t = team(req.params.id);
-      const members = (db.prepare("SELECT id FROM users WHERE team_id = ?").all(t.id) as { id: number }[]).map((x) => x.id);
-      tx(db, () => {
-        db.prepare("UPDATE users SET team_id = NULL WHERE team_id = ?").run(t.id);
-        db.prepare("DELETE FROM teams WHERE id = ?").run(t.id);
+      const t = await team(req.params.id);
+      const members = (await memberIdsOf(t.id)).map(Number);
+      await db.tx(async (q) => {
+        await q.run("UPDATE users SET team_id = NULL WHERE team_id = ?", t.id);
+        await q.run("DELETE FROM teams WHERE id = ?", t.id);
+        await audit(q, "scim", "scim.group.deleted", { id: t.id, name: t.name, members: members.length });
       });
-      audit(db, "scim", "scim.group.deleted", { id: t.id, name: t.name, members: members.length });
       await sync.pushCaps(members).catch((e) => console.error("cap push after SCIM group delete failed:", e));
       res.status(204).end();
     }),

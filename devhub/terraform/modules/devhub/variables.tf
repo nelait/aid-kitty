@@ -100,6 +100,29 @@ variable "existing_secret" {
   default     = ""
 }
 
+variable "database_type" {
+  description = "sqlite (one replica, data on a volume) or postgres (several replicas)."
+  type        = string
+  default     = "sqlite"
+  validation {
+    condition     = contains(["sqlite", "postgres"], var.database_type)
+    error_message = "database_type must be sqlite or postgres."
+  }
+}
+
+variable "database_url" {
+  description = "postgres://user:pass@host:5432/devhub, when database_type = postgres and existing_secret is not used."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "replicas" {
+  description = "Number of Dev Hub pods. More than one needs database_type = postgres."
+  type        = number
+  default     = 1
+}
+
 variable "storage_size" {
   description = "Size of the data volume (SQLite)."
   type        = string

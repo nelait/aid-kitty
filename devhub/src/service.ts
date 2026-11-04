@@ -1,5 +1,5 @@
 import type { Config } from "./config.js";
-import { audit, getUser, nowIso, tx, type Db, type RaiseRequest, type User } from "./db.js";
+import { audit, getUser, insertId, nowIso, type Db, type Queryable, type RaiseRequest, type User } from "./db.js";
 import type { Principal } from "./auth.js";
 import type { SyncService } from "./sync.js";
 import { currentPeriod, fmtUsd, usdToCents, walletFor } from "./wallet.js";
@@ -24,23 +24,29 @@ export function notify(cfg: Config, text: string): void {
   }).catch((e) => console.error("slack notify failed:", (e as Error).message));
 }
 
-export function createRaiseRequest(db: Db, cfg: Config, user: User, amountUsd: number, reason: string): RaiseRequest {
+export async function createRaiseRequest(db: Db, cfg: Config, user: User, amountUsd: number, reason: string): Promise<RaiseRequest> {
   if (!Number.isFinite(amountUsd) || amountUsd <= 0 || amountUsd > 100_000) {
     throw new HttpError(400, "amount must be between $0.01 and $100,000");
   }
   reason = reason.trim();
   if (reason.length < 5) throw new HttpError(400, "give a short reason (at least 5 characters)");
   if (reason.length > 1000) throw new HttpError(400, "reason is too long (1000 characters max)");
-  const pending = db
-    .prepare("SELECT COUNT(*) AS n FROM raise_requests WHERE user_id = ? AND status = 'pending'")
-    .get(user.id) as { n: number };
-  if (Number(pending.n) >= 3) throw new HttpError(409, "you already have 3 pending requests");
+  const pending = await db.get<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM raise_requests WHERE user_id = ? AND status = 'pending'",
+    user.id,
+  );
+  if (Number(pending!.n) >= 3) throw new HttpError(409, "you already have 3 pending requests");
 
-  const info = db
-    .prepare("INSERT INTO raise_requests (user_id, period, amount_cents, reason) VALUES (?, ?, ?, ?)")
-    .run(user.id, currentPeriod(), usdToCents(amountUsd), reason);
-  const req = db.prepare("SELECT * FROM raise_requests WHERE id = ?").get(info.lastInsertRowid) as unknown as RaiseRequest;
-  audit(db, user.email, "raise.requested", { id: req.id, cents: req.amount_cents });
+  const id = await insertId(
+    db,
+    "INSERT INTO raise_requests (user_id, period, amount_cents, reason) VALUES (?, ?, ?, ?)",
+    user.id,
+    currentPeriod(),
+    usdToCents(amountUsd),
+    reason,
+  );
+  const req = (await db.get<RaiseRequest>("SELECT * FROM raise_requests WHERE id = ?", id))!;
+  await audit(db, user.email, "raise.requested", { id: req.id, cents: req.amount_cents });
   notify(
     cfg,
     `${user.email} requested ${fmtUsd(req.amount_cents)} more AI budget: "${reason}". Review: ${cfg.publicUrl}/approvals`,
@@ -49,22 +55,23 @@ export function createRaiseRequest(db: Db, cfg: Config, user: User, amountUsd: n
 }
 
 /** Admins decide any request; managers decide requests from their own team. Nobody decides their own. */
-export function canDecide(db: Db, p: Principal, req: RaiseRequest): boolean {
+export async function canDecide(db: Queryable, p: Principal, req: RaiseRequest): Promise<boolean> {
   if (p.user && p.user.id === req.user_id) return false;
   if (p.isAdmin) return true;
   if (p.user?.role !== "manager" || p.user.team_id === null) return false;
-  const requester = getUser(db, req.user_id);
+  const requester = await getUser(db, req.user_id);
   return requester?.team_id === p.user.team_id;
 }
 
-export function listDecidable(db: Db, p: Principal, status = "pending") {
-  const rows = db
-    .prepare(
-      `SELECT r.*, u.email, u.team_id FROM raise_requests r JOIN users u ON u.id = r.user_id
-       WHERE r.status = ? ORDER BY r.created_at`,
-    )
-    .all(status) as unknown as (RaiseRequest & { email: string; team_id: number | null })[];
-  return rows.filter((r) => canDecide(db, p, r));
+export async function listDecidable(db: Db, p: Principal, status = "pending") {
+  const rows = await db.all<RaiseRequest & { email: string; team_id: number | null }>(
+    `SELECT r.*, u.email, u.team_id FROM raise_requests r JOIN users u ON u.id = r.user_id
+     WHERE r.status = ? ORDER BY r.created_at, r.id`,
+    status,
+  );
+  const out = [];
+  for (const r of rows) if (await canDecide(db, p, r)) out.push(r);
+  return out;
 }
 
 export async function decideRaiseRequest(
@@ -76,22 +83,25 @@ export async function decideRaiseRequest(
   approve: boolean,
   note: string,
 ): Promise<RaiseRequest> {
-  const req = db.prepare("SELECT * FROM raise_requests WHERE id = ?").get(id) as RaiseRequest | undefined;
+  const req = await db.get<RaiseRequest>("SELECT * FROM raise_requests WHERE id = ?", id);
   if (!req) throw new HttpError(404, "request not found");
-  if (!canDecide(db, p, req)) throw new HttpError(403, "you can't decide this request");
+  if (!(await canDecide(db, p, req))) throw new HttpError(403, "you can't decide this request");
 
-  const decided = tx(db, () => {
-    const res = db
-      .prepare(
-        "UPDATE raise_requests SET status = ?, decided_by = ?, decision_note = ?, decided_at = ? WHERE id = ? AND status = 'pending'",
-      )
-      .run(approve ? "approved" : "denied", p.user?.id ?? null, note.trim() || null, nowIso(), id);
-    if (Number(res.changes) === 0) throw new HttpError(409, "request was already decided");
-    return db.prepare("SELECT * FROM raise_requests WHERE id = ?").get(id) as unknown as RaiseRequest;
+  const decided = await db.tx(async (q) => {
+    const res = await q.run(
+      "UPDATE raise_requests SET status = ?, decided_by = ?, decision_note = ?, decided_at = ? WHERE id = ? AND status = 'pending'",
+      approve ? "approved" : "denied",
+      p.user?.id ?? null,
+      note.trim() || null,
+      nowIso(),
+      id,
+    );
+    if (res.changes === 0) throw new HttpError(409, "request was already decided");
+    await audit(q, p.label, approve ? "raise.approved" : "raise.denied", { id, cents: req.amount_cents });
+    return (await q.get<RaiseRequest>("SELECT * FROM raise_requests WHERE id = ?", id))!;
   });
-  audit(db, p.label, approve ? "raise.approved" : "raise.denied", { id, cents: req.amount_cents });
 
-  const requester = getUser(db, req.user_id)!;
+  const requester = (await getUser(db, req.user_id))!;
   notify(
     cfg,
     `${p.label} ${approve ? "approved" : "denied"} ${fmtUsd(req.amount_cents)} for ${requester.email}` +
@@ -114,19 +124,20 @@ export interface ReportRow {
   by_tool: Record<string, number>;
 }
 
-export function spendReport(db: Db, cfg: Config, period: string): { tools: string[]; rows: ReportRow[] } {
-  const users = db.prepare("SELECT * FROM users ORDER BY email").all() as unknown as User[];
+export async function spendReport(db: Db, cfg: Config, period: string): Promise<{ tools: string[]; rows: ReportRow[] }> {
+  const users = await db.all<User>("SELECT * FROM users ORDER BY email");
   const teams = new Map(
-    (db.prepare("SELECT id, name, cost_center FROM teams").all() as { id: number; name: string; cost_center: string | null }[]).map(
-      (t) => [t.id, t],
-    ),
+    (await db.all<{ id: number; name: string; cost_center: string | null }>("SELECT id, name, cost_center FROM teams")).map((t) => [
+      t.id,
+      t,
+    ]),
   );
-  const tools = (db.prepare("SELECT DISTINCT tool FROM spend WHERE period = ? ORDER BY tool").all(period) as { tool: string }[]).map(
+  const tools = (await db.all<{ tool: string }>("SELECT DISTINCT tool FROM spend WHERE period = ? ORDER BY tool", period)).map(
     (t) => t.tool,
   );
   const rows: ReportRow[] = [];
   for (const u of users) {
-    const w = walletFor(db, cfg, u, period);
+    const w = await walletFor(db, cfg, u, period);
     if (w.spendCents === 0 && u.status !== "active") continue;
     const team = u.team_id !== null ? teams.get(u.team_id) : undefined;
     rows.push({

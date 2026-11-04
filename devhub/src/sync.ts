@@ -3,7 +3,8 @@ import { ClaudeConnector } from "./connectors/claude.js";
 import { CopilotConnector } from "./connectors/copilot.js";
 import { CursorConnector } from "./connectors/cursor.js";
 import type { Connector } from "./connectors/types.js";
-import { audit, nowIso, tx, type Db, type User } from "./db.js";
+import { randomUUID } from "node:crypto";
+import { audit, nowIso, type Db, type User } from "./db.js";
 import { currentPeriod, walletFor } from "./wallet.js";
 
 export interface SyncResult {
@@ -44,7 +45,7 @@ export class SyncService {
     for (const c of this.connectors) {
       try {
         const rows = await c.fetchMonthlySpend();
-        const { matched, unmatched } = this.storeSpend(c, rows);
+        const { matched, unmatched } = await this.storeSpend(c, rows);
         results.push({ connector: c.tool, ok: true, message: `${matched} users matched, ${unmatched} unmatched` });
       } catch (e) {
         // Keep the previous spend for this tool rather than zeroing it on a failed pull.
@@ -64,14 +65,15 @@ export class SyncService {
         results.push({ connector: "claude-caps", ok: false, message: "skipped: a spend pull failed" });
       }
     }
-    const ins = this.db.prepare("INSERT INTO sync_runs (ts, connector, ok, message) VALUES (?, ?, ?, ?)");
-    for (const r of results) ins.run(nowIso(), r.connector, r.ok ? 1 : 0, r.message);
+    for (const r of results) {
+      await this.db.run("INSERT INTO sync_runs (ts, connector, ok, message) VALUES (?, ?, ?, ?)", nowIso(), r.connector, r.ok ? 1 : 0, r.message);
+    }
     return results;
   }
 
-  private storeSpend(c: Connector, rows: { externalId: string; cents: number }[]) {
+  private async storeSpend(c: Connector, rows: { externalId: string; cents: number }[]) {
     const period = currentPeriod();
-    const users = this.db.prepare("SELECT * FROM users").all() as unknown as User[];
+    const users = await this.db.all<User>("SELECT * FROM users");
     const norm = (id: string) => (c.normalizeId ? c.normalizeId(id) : id);
     const byExternal = new Map<string, User>();
     for (const u of users) {
@@ -89,15 +91,22 @@ export class SyncService {
     }
 
     const ts = nowIso();
-    tx(this.db, () => {
-      this.db.prepare("DELETE FROM spend WHERE period = ? AND tool = ?").run(period, c.tool);
-      this.db.prepare("DELETE FROM unmatched_spend WHERE period = ? AND tool = ?").run(period, c.tool);
-      const ins = this.db.prepare("INSERT INTO spend (period, user_id, tool, cents, synced_at) VALUES (?, ?, ?, ?, ?)");
-      for (const [uid, cents] of perUser) ins.run(period, uid, c.tool, cents, ts);
-      const insU = this.db.prepare(
-        "INSERT INTO unmatched_spend (period, tool, external_id, cents, synced_at) VALUES (?, ?, ?, ?, ?)",
-      );
-      for (const [ext, cents] of unmatched) insU.run(period, c.tool, ext, cents, ts);
+    await this.db.tx(async (q) => {
+      await q.run("DELETE FROM spend WHERE period = ? AND tool = ?", period, c.tool);
+      await q.run("DELETE FROM unmatched_spend WHERE period = ? AND tool = ?", period, c.tool);
+      for (const [uid, cents] of perUser) {
+        await q.run("INSERT INTO spend (period, user_id, tool, cents, synced_at) VALUES (?, ?, ?, ?, ?)", period, uid, c.tool, cents, ts);
+      }
+      for (const [ext, cents] of unmatched) {
+        await q.run(
+          "INSERT INTO unmatched_spend (period, tool, external_id, cents, synced_at) VALUES (?, ?, ?, ?, ?)",
+          period,
+          c.tool,
+          ext,
+          cents,
+          ts,
+        );
+      }
     });
     return { matched: perUser.size, unmatched: unmatched.size };
   }
@@ -109,31 +118,55 @@ export class SyncService {
   async pushCaps(onlyUserIds?: number[]): Promise<number> {
     if (!this.claude) return 0;
     const period = currentPeriod();
-    let users = this.db.prepare("SELECT * FROM users").all() as unknown as User[];
+    let users = await this.db.all<User>("SELECT * FROM users");
     if (onlyUserIds) users = users.filter((u) => onlyUserIds.includes(u.id));
-    const last = this.db.prepare("SELECT period, cents FROM claude_caps WHERE user_id = ?");
-    const save = this.db.prepare(
-      "INSERT INTO claude_caps (user_id, period, cents, pushed_at) VALUES (?, ?, ?, ?) " +
-        "ON CONFLICT(user_id) DO UPDATE SET period = excluded.period, cents = excluded.cents, pushed_at = excluded.pushed_at",
-    );
     let changed = 0;
     for (const u of users) {
       const ext = this.claude.externalIdFor(u);
       if (!ext) continue;
-      const cap = walletFor(this.db, this.cfg, u, period).claudeCapCents;
-      const prev = last.get(u.id) as { period: string; cents: number } | undefined;
+      const cap = (await walletFor(this.db, this.cfg, u, period)).claudeCapCents;
+      const prev = await this.db.get<{ period: string; cents: number }>("SELECT period, cents FROM claude_caps WHERE user_id = ?", u.id);
       if (prev && prev.period === period && Number(prev.cents) === cap) continue;
       await this.claude.setMonthlyCap(ext, cap);
-      save.run(u.id, period, cap, nowIso());
-      audit(this.db, "system", "claude.cap.set", { user: u.email, cents: cap, period });
+      await this.db.run(
+        "INSERT INTO claude_caps (user_id, period, cents, pushed_at) VALUES (?, ?, ?, ?) " +
+          "ON CONFLICT(user_id) DO UPDATE SET period = excluded.period, cents = excluded.cents, pushed_at = excluded.pushed_at",
+        u.id,
+        period,
+        cap,
+        nowIso(),
+      );
+      await audit(this.db, "system", "claude.cap.set", { user: u.email, cents: cap, period });
       changed++;
     }
     return changed;
   }
 
+  private readonly instanceId = randomUUID();
+
+  /**
+   * With several replicas on one Postgres database, only the holder of a short lease runs
+   * the scheduled sync. The lease is a row in settings whose updated_at is its expiry; a
+   * replica that dies loses it after three intervals. Manual "Sync now" ignores the lease.
+   */
+  async claimSyncLease(now = Date.now()): Promise<boolean> {
+    const until = new Date(now + this.cfg.syncIntervalSeconds * 3000).toISOString();
+    const res = await this.db.run(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('sync_lease', ?, ?) " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at " +
+        "WHERE settings.value = excluded.value OR settings.updated_at < ?",
+      this.instanceId,
+      until,
+      new Date(now).toISOString(),
+    );
+    return res.changes > 0;
+  }
+
   start(): () => void {
     const tick = () => {
-      this.run().catch((e) => console.error("sync failed", e));
+      this.claimSyncLease()
+        .then((leader) => (leader ? this.run() : undefined))
+        .catch((e) => console.error("sync failed", e));
     };
     tick();
     const t = setInterval(tick, this.cfg.syncIntervalSeconds * 1000);

@@ -42,7 +42,7 @@ test("SCIM requires the configured bearer token", async () => {
     const res = await fetch(`${off.url}/scim/v2/Users`, { headers: { authorization: "Bearer anything" } });
     assert.equal(res.status, 404);
   } finally {
-    off.close();
+    await off.close();
   }
 });
 
@@ -75,11 +75,11 @@ test("Okta create flow: look up by userName, then create", async () => {
 
 test("creating a user an admin already added links that user instead of duplicating", async () => {
   await admin(h.url, "POST", "/api/admin/users", { email: "ben@acme.io", github_login: "ben-gh" });
-  const existingId = String(getUserByEmail(h.db, "ben@acme.io")!.id);
+  const existingId = String((await getUserByEmail(h.db, "ben@acme.io"))!.id);
   const r = await scim("POST", "/Users", oktaUser("ben@acme.io", "Ben", "Okafor", "00u-ben"));
   assert.equal(r.status, 201);
   assert.equal(r.body.id, existingId);
-  assert.equal(getUserByEmail(h.db, "ben@acme.io")!.github_login, "ben-gh");
+  assert.equal((await getUserByEmail(h.db, "ben@acme.io"))!.github_login, "ben-gh");
   ids.ben = r.body.id;
   // A different IdP identity can't claim the same userName.
   const dup = await scim("POST", "/Users", oktaUser("ben@acme.io", "Ben", "Other", "00u-someone-else"));
@@ -89,7 +89,7 @@ test("creating a user an admin already added links that user instead of duplicat
 
 test("deactivation (Okta PATCH) ends sessions and drops the Claude cap to $0; reactivation (Entra style) restores it", async () => {
   const ana = await Client.login(h.url, "ana@acme.io");
-  const sub = getUserByEmail(h.db, "ana@acme.io")!.oidc_sub!;
+  const sub = (await getUserByEmail(h.db, "ana@acme.io"))!.oidc_sub!;
   await h.sync.pushCaps();
   assert.equal(h.claude.caps.get(sub), "10000");
 
@@ -139,10 +139,10 @@ test("Okta group push: groups become teams, membership sets each person's team",
   assert.equal(r.status, 201, JSON.stringify(r.body));
   ids.platform = r.body.id;
   assert.deepEqual(r.body.members.map((m: { value: string }) => m.value), [ids.ana]);
-  const team = h.db.prepare("SELECT * FROM teams WHERE id = ?").get(Number(ids.platform)) as { cost_center: string };
+  const team = (await h.db.get<{ cost_center: string }>("SELECT * FROM teams WHERE id = ?", Number(ids.platform)))!;
   assert.equal(team.cost_center, "CC-100");
   // Joining a team with a $50 default lowers Ana's Claude cap right away.
-  const sub = getUserByEmail(h.db, "ana.costa@acme.io")!.oidc_sub!;
+  const sub = (await getUserByEmail(h.db, "ana.costa@acme.io"))!.oidc_sub!;
   assert.equal(h.claude.caps.get(sub), "5000");
 
   r = await scim("PATCH", `/Groups/${ids.platform}`, {
@@ -157,7 +157,7 @@ test("Okta group push: groups become teams, membership sets each person's team",
     Operations: [{ op: "remove", path: `members[value eq "${ids.ana}"]` }],
   });
   assert.deepEqual(r.body.members.map((m: { value: string }) => m.value), [ids.ben]);
-  assert.equal(getUserByEmail(h.db, "ana.costa@acme.io")!.team_id, null);
+  assert.equal((await getUserByEmail(h.db, "ana.costa@acme.io"))!.team_id, null);
   assert.equal(h.claude.caps.get(sub), "10000");
 
   r = await scim("PATCH", `/Groups/${ids.platform}`, {
@@ -175,14 +175,14 @@ test("deleting a group removes the team but keeps its people", async () => {
   const r = await scim("DELETE", `/Groups/${ids.platform}`);
   assert.equal(r.status, 204);
   assert.equal((await scim("GET", `/Groups/${ids.platform}`)).status, 404);
-  assert.equal(getUserByEmail(h.db, "ben@acme.io")!.team_id, null);
+  assert.equal((await getUserByEmail(h.db, "ben@acme.io"))!.team_id, null);
 });
 
 test("deleting a user hides them from SCIM but keeps them, disabled, for spend history", async () => {
   const r = await scim("DELETE", `/Users/${ids.ben}`);
   assert.equal(r.status, 204);
   assert.equal((await scim("GET", `/Users/${ids.ben}`)).status, 404);
-  const ben = getUserByEmail(h.db, "ben@acme.io")!;
+  const ben = (await getUserByEmail(h.db, "ben@acme.io"))!;
   assert.equal(ben.status, "disabled");
   assert.ok(ben.deleted_at);
   await assert.rejects(Client.login(h.url, "ben@acme.io"), /login failed: 403/);

@@ -34,11 +34,11 @@ test("without a license, evaluation mode allows 5 active people", async () => {
     await assert.rejects(Client.login(h.url, "g@x.io"), /login failed: 403/);
     // Existing people still sign in.
     await Client.login(h.url, "a@x.io");
-    const status = licenseStatus(h.db, h.cfg);
+    const status = (await licenseStatus(h.db, h.cfg));
     assert.equal(status.state, "evaluation");
     assert.equal(status.canActivate, false);
   } finally {
-    h.close();
+    await h.close();
   }
 });
 
@@ -49,7 +49,7 @@ test("a 10-seat license allows 11 (10% true-up, at least one); freeing a seat al
     assert.equal((await addUsers(h.url, emails)).status, 201);
     assert.equal((await addUsers(h.url, ["late@x.io"])).status, 403);
     // A bulk import that would cross the limit is rolled back as a whole.
-    assert.equal(getUserByEmail(h.db, "late@x.io"), undefined);
+    assert.equal(await getUserByEmail(h.db, "late@x.io"), undefined);
 
     const scim = await fetch(`${h.url}/scim/v2/Users`, {
       method: "POST",
@@ -63,36 +63,36 @@ test("a 10-seat license allows 11 (10% true-up, at least one); freeing a seat al
     // Reactivating u0 now needs a seat too.
     assert.equal((await admin(h.url, "POST", "/api/admin/users", { email: "u0@x.io", status: "active" })).status, 403);
   } finally {
-    h.close();
+    await h.close();
   }
 });
 
 test("expiry: 30-day grace, then no new people, but budgets keep being enforced", async () => {
   const h = await harness({ license: { text: testLicense(50, -10) } });
   try {
-    let s = licenseStatus(h.db, h.cfg);
+    let s = (await licenseStatus(h.db, h.cfg));
     assert.equal(s.state, "grace");
     assert.equal(s.canActivate, true);
     assert.match(s.message, /Renew within 20 days/);
 
     const later = Date.now() + 25 * 86_400_000;
-    s = licenseStatus(h.db, h.cfg, later);
+    s = (await licenseStatus(h.db, h.cfg, later));
     assert.equal(s.state, "expired");
     assert.equal(s.canActivate, false);
   } finally {
-    h.close();
+    await h.close();
   }
 
   const expired = await harness({ license: { text: testLicense(50, -40) } });
   try {
-    expired.db.exec(`INSERT INTO users (email, oidc_sub) VALUES ('ana@x.io', 'okta|ana')`);
+    await expired.db.exec(`INSERT INTO users (email, oidc_sub) VALUES ('ana@x.io', 'okta|ana')`);
     assert.equal((await addUsers(expired.url, ["new@x.io"])).status, 403);
     expired.claude.spend.set("okta|ana", 2500);
     const results = await expired.sync.run();
     assert.ok(results.every((r) => r.ok), JSON.stringify(results));
     assert.equal(expired.claude.caps.get("okta|ana"), "10000");
   } finally {
-    expired.close();
+    await expired.close();
   }
 });
 
@@ -113,6 +113,6 @@ test("admins can install a license through the API; bad files are refused", asyn
     const dev = await Client.login(h.url, "dev@x.io");
     assert.equal((await dev.get("/api/admin/license")).status, 403);
   } finally {
-    h.close();
+    await h.close();
   }
 });

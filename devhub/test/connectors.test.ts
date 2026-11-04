@@ -9,17 +9,20 @@ import { harness, MockCursor, MockGitHub, type Harness } from "./helpers.js";
 let h: Harness;
 before(async () => {
   h = await harness();
-  h.db.exec(`INSERT INTO users (email, oidc_sub, github_login) VALUES
-    ('Ana@Acme.io', 'okta|ana', 'ana-gh'),
+  await h.db.exec(`INSERT INTO users (email, oidc_sub, github_login) VALUES
+    ('ana@acme.io', 'okta|ana', 'ana-gh'),
     ('ben@acme.io', 'okta|ben', 'ben-gh');`);
 });
 after(() => h.close());
 
-const spendOf = (email: string, tool: string) =>
+const spendOf = async (email: string, tool: string) =>
   (
-    h.db
-      .prepare("SELECT cents FROM spend WHERE period = ? AND tool = ? AND user_id = ?")
-      .get(currentPeriod(), tool, getUserByEmail(h.db, email)!.id) as { cents: number } | undefined
+    await h.db.get<{ cents: number }>(
+      "SELECT cents FROM spend WHERE period = ? AND tool = ? AND user_id = ?",
+      currentPeriod(),
+      tool,
+      (await getUserByEmail(h.db, email))!.id,
+    )
   )?.cents;
 
 test("Copilot spend = seat price + premium-request overage (Copilot products only, net of allowance)", async () => {
@@ -34,8 +37,8 @@ test("Copilot spend = seat price + premium-request overage (Copilot products onl
   ]);
   const results = await h.sync.run();
   assert.ok(results.every((r) => r.ok), JSON.stringify(results));
-  assert.equal(spendOf("ana@acme.io", "copilot"), 1900 + 320);
-  assert.equal(spendOf("ben@acme.io", "copilot"), 1900);
+  assert.equal(await spendOf("ana@acme.io", "copilot"), 1900 + 320);
+  assert.equal(await spendOf("ben@acme.io", "copilot"), 1900);
   assert.equal(h.github.premiumCalls, 2);
   // The overage reduces Claude headroom: 100.00 - 22.20 = 77.80.
   assert.equal(h.claude.caps.get("okta|ana"), "7780");
@@ -77,9 +80,9 @@ test("Cursor spend is matched by email, case-insensitively, across pages", async
   ];
   const results = await h.sync.run();
   assert.ok(results.every((r) => r.ok), JSON.stringify(results));
-  assert.equal(spendOf("ana@acme.io", "cursor"), 1250);
-  assert.equal(spendOf("ben@acme.io", "cursor"), 400);
-  const unmatched = h.db.prepare("SELECT external_id, cents FROM unmatched_spend WHERE tool = 'cursor'").all();
+  assert.equal(await spendOf("ana@acme.io", "cursor"), 1250);
+  assert.equal(await spendOf("ben@acme.io", "cursor"), 400);
+  const unmatched = await h.db.all("SELECT external_id, cents FROM unmatched_spend WHERE tool = 'cursor'");
   assert.deepEqual(unmatched.map((r) => ({ ...r })), [{ external_id: "intern@acme.io", cents: 75 }]);
   // Ana: Copilot 22.20 + Cursor 12.50 → 65.30 left; Claude cap 65.30.
   assert.equal(h.claude.caps.get("okta|ana"), "6530");

@@ -8,6 +8,8 @@ locals {
       repository = var.image_repository
       tag        = var.image_tag
     }
+    database     = { type = var.database_type }
+    replicaCount = var.replicas
     persistence = {
       enabled      = true
       size         = var.storage_size
@@ -63,10 +65,24 @@ resource "kubernetes_secret" "this" {
     name      = local.secret_name
     namespace = local.namespace
   }
-  data = var.secrets
+  data = merge(var.secrets, var.database_url != "" ? { DATABASE_URL = var.database_url } : {})
+
+  lifecycle {
+    precondition {
+      condition     = var.database_type != "postgres" || var.database_url != "" || contains(keys(var.secrets), "DATABASE_URL")
+      error_message = "database_type = postgres needs database_url (or DATABASE_URL in secrets, or an existing_secret that has it)."
+    }
+  }
 }
 
 resource "helm_release" "devhub" {
+  lifecycle {
+    precondition {
+      condition     = var.database_type == "postgres" || var.replicas == 1
+      error_message = "SQLite supports one replica; set database_type = postgres to run more."
+    }
+  }
+
   name      = var.release_name
   namespace = local.namespace
   chart     = coalesce(var.chart_path, "${path.module}/../../../charts/devhub")

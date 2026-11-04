@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { requireAdmin, requireUser } from "../auth.js";
 import type { Config } from "../config.js";
-import { audit, getUser, getUserByEmail, nowIso, tx, type Db, type User } from "../db.js";
+import { audit, getUser, getUserByEmail, insertId, isUniqueViolation, nowIso, type Db, type Param, type Queryable, type User } from "../db.js";
 import {
   HttpError,
   createRaiseRequest,
@@ -59,30 +59,30 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
   r.get(
     "/me",
     requireUser,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const u = req.principal!.user;
       if (!u) throw new HttpError(400, "the automation token has no wallet");
-      res.json({ user: publicUser(u), wallet: walletFor(db, cfg, u), csrf: req.principal!.csrf });
+      res.json({ user: publicUser(u), wallet: await walletFor(db, cfg, u), csrf: req.principal!.csrf });
     }),
   );
 
   r.get(
     "/me/raise-requests",
     requireUser,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const u = req.principal!.user;
       if (!u) throw new HttpError(400, "the automation token has no wallet");
-      res.json(db.prepare("SELECT * FROM raise_requests WHERE user_id = ? ORDER BY id DESC").all(u.id));
+      res.json(await db.all("SELECT * FROM raise_requests WHERE user_id = ? ORDER BY id DESC", u.id));
     }),
   );
 
   r.post(
     "/me/raise-requests",
     requireUser,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const u = req.principal!.user;
       if (!u) throw new HttpError(400, "the automation token has no wallet");
-      res.status(201).json(createRaiseRequest(db, cfg, u, Number(req.body.amount_usd), String(req.body.reason ?? "")));
+      res.status(201).json(await createRaiseRequest(db, cfg, u, Number(req.body.amount_usd), String(req.body.reason ?? "")));
     }),
   );
 
@@ -90,10 +90,10 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
   r.get(
     "/raise-requests",
     requireUser,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const status = String(req.query.status ?? "pending");
       if (!["pending", "approved", "denied"].includes(status)) throw new HttpError(400, "bad status");
-      res.json(listDecidable(db, req.principal!, status));
+      res.json(await listDecidable(db, req.principal!, status));
     }),
   );
 
@@ -111,81 +111,97 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
   }
 
   // ---- Admin: teams ----
-  r.get("/admin/teams", requireAdmin, (_req, res) => {
-    res.json(db.prepare("SELECT * FROM teams ORDER BY name").all());
-  });
+  r.get("/admin/teams", requireAdmin, wrap(async (_req, res) => res.json(await db.all("SELECT * FROM teams ORDER BY name"))));
 
-  const saveTeam = (id: number | null, b: Record<string, unknown>, actor: string) => {
+  const saveTeam = async (id: number | null, b: Record<string, unknown>, actor: string) => {
     const name = optStr(b.name, "name");
     const cost = optStr(b.cost_center, "cost_center");
     const pool = optUsdToCents(b.monthly_pool_usd, "monthly_pool_usd");
     const def = optUsdToCents(b.member_default_usd, "member_default_usd");
-    if (id === null) {
-      if (!name) throw new HttpError(400, "name is required");
-      const info = db
-        .prepare("INSERT INTO teams (name, cost_center, monthly_pool_cents, member_default_cents) VALUES (?, ?, ?, ?)")
-        .run(name, cost ?? null, pool ?? null, def ?? null);
-      id = Number(info.lastInsertRowid);
-    } else {
-      const t = db.prepare("SELECT * FROM teams WHERE id = ?").get(id);
-      if (!t) throw new HttpError(404, "team not found");
-      const sets: [string, unknown][] = [];
-      if (name) sets.push(["name", name]);
-      if (cost !== undefined) sets.push(["cost_center", cost]);
-      if (pool !== undefined) sets.push(["monthly_pool_cents", pool]);
-      if (def !== undefined) sets.push(["member_default_cents", def]);
-      if (sets.length) {
-        db.prepare(`UPDATE teams SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(
-          ...(sets.map(([, v]) => v) as (string | number | null)[]),
-          id,
+    try {
+      if (id === null) {
+        if (!name) throw new HttpError(400, "name is required");
+        id = await insertId(
+          db,
+          "INSERT INTO teams (name, cost_center, monthly_pool_cents, member_default_cents) VALUES (?, ?, ?, ?)",
+          name,
+          cost ?? null,
+          pool ?? null,
+          def ?? null,
         );
+      } else {
+        if (!(await db.get("SELECT id FROM teams WHERE id = ?", id))) throw new HttpError(404, "team not found");
+        const sets: [string, Param][] = [];
+        if (name) sets.push(["name", name]);
+        if (cost !== undefined) sets.push(["cost_center", cost]);
+        if (pool !== undefined) sets.push(["monthly_pool_cents", pool]);
+        if (def !== undefined) sets.push(["member_default_cents", def]);
+        if (sets.length) {
+          await db.run(`UPDATE teams SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`, ...sets.map(([, v]) => v), id);
+        }
       }
+    } catch (e) {
+      if (isUniqueViolation(e)) throw new HttpError(409, `a team named ${name} already exists`);
+      throw e;
     }
-    audit(db, actor, "team.saved", { id, ...b });
-    return db.prepare("SELECT * FROM teams WHERE id = ?").get(id);
+    await audit(db, actor, "team.saved", { id, ...b });
+    // Team budgets feed every member's wallet: re-check their caps.
+    const members = (await db.all<{ id: number }>("SELECT id FROM users WHERE team_id = ?", id)).map((m) => m.id);
+    if (members.length) await sync.pushCaps(members).catch((e) => console.error("cap push failed:", e));
+    return db.get("SELECT * FROM teams WHERE id = ?", id);
   };
 
-  r.post("/admin/teams", requireAdmin, wrap((req, res) => res.status(201).json(saveTeam(null, req.body, req.principal!.label))));
-  r.patch("/admin/teams/:id", requireAdmin, wrap((req, res) => res.json(saveTeam(Number(req.params.id), req.body, req.principal!.label))));
+  r.post("/admin/teams", requireAdmin, wrap(async (req, res) => res.status(201).json(await saveTeam(null, req.body, req.principal!.label))));
+  r.patch(
+    "/admin/teams/:id",
+    requireAdmin,
+    wrap(async (req, res) => res.json(await saveTeam(Number(req.params.id), req.body, req.principal!.label))),
+  );
 
   // ---- Admin: users ----
-  r.get("/admin/users", requireAdmin, (_req, res) => {
-    const users = db.prepare("SELECT * FROM users ORDER BY email").all() as unknown as User[];
-    res.json(users.map((u) => ({ ...publicUser(u), wallet: walletFor(db, cfg, u) })));
-  });
+  r.get(
+    "/admin/users",
+    requireAdmin,
+    wrap(async (_req, res) => {
+      const users = await db.all<User>("SELECT * FROM users ORDER BY email");
+      const out = [];
+      for (const u of users) out.push({ ...publicUser(u), wallet: await walletFor(db, cfg, u) });
+      res.json(out);
+    }),
+  );
 
   const ROLES = ["member", "manager", "admin"];
-  const teamIdByName = (name: string | null | undefined): number | null | undefined => {
+  const teamIdByName = async (q: Queryable, name: string | null | undefined): Promise<number | null | undefined> => {
     if (name === undefined) return undefined;
     if (name === null) return null;
-    const t = db.prepare("SELECT id FROM teams WHERE name = ?").get(name) as { id: number } | undefined;
+    const t = await q.get<{ id: number }>("SELECT id FROM teams WHERE name = ?", name);
     if (!t) throw new HttpError(400, `unknown team "${name}"`);
     return t.id;
   };
 
-  /** Create or update by email. Used for single edits and bulk onboarding. */
-  const upsertUser = (b: Record<string, unknown>, actor: string): User => {
+  /** Create or update by email. Used for single edits and bulk onboarding; runs inside a transaction. */
+  const upsertUser = async (q: Queryable, b: Record<string, unknown>, actor: string): Promise<User> => {
     const email = optStr(b.email, "email")?.toLowerCase();
     if (!email || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, "valid email is required");
     const role = b.role === undefined ? undefined : String(b.role);
     if (role !== undefined && !ROLES.includes(role)) throw new HttpError(400, `role must be one of ${ROLES.join(", ")}`);
     const status = b.status === undefined ? undefined : String(b.status);
     if (status !== undefined && !["active", "disabled"].includes(status)) throw new HttpError(400, "bad status");
-    const fields: Record<string, unknown> = {
+    const fields: Record<string, Param | undefined> = {
       name: optStr(b.name, "name"),
-      team_id: teamIdByName(optStr(b.team, "team")),
+      team_id: await teamIdByName(q, optStr(b.team, "team")),
       role,
       status,
-      github_login: optStr(b.github_login, "github_login"),
+      github_login: optStr(b.github_login, "github_login")?.toLowerCase(),
       claude_user_id: optStr(b.claude_user_id, "claude_user_id"),
       monthly_budget_cents: optUsdToCents(b.monthly_budget_usd, "monthly_budget_usd"),
     };
-    const sets = Object.entries(fields).filter(([, v]) => v !== undefined);
-    let u = getUserByEmail(db, email);
+    const sets = Object.entries(fields).filter((e): e is [string, Param] => e[1] !== undefined);
+    let u = await getUserByEmail(q, email);
     const activating = u ? u.status === "disabled" && status === "active" : status !== "disabled";
     if (activating) {
       try {
-        assertCanActivate(db, cfg);
+        await assertCanActivate(q, cfg);
       } catch (e) {
         if (e instanceof LicenseLimitError) throw new HttpError(403, `${email}: ${e.message}`);
         throw e;
@@ -193,26 +209,21 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     }
     try {
       if (!u) {
-        db.prepare("INSERT INTO users (email) VALUES (?)").run(email);
-        u = getUserByEmail(db, email)!;
+        await q.run("INSERT INTO users (email) VALUES (?)", email);
+        u = (await getUserByEmail(q, email))!;
       }
       if (sets.length) {
-        db.prepare(`UPDATE users SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(
-          ...(sets.map(([, v]) => v) as (string | number | null)[]),
-          u.id,
-        );
+        await q.run(`UPDATE users SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`, ...sets.map(([, v]) => v), u.id);
       }
     } catch (e) {
-      if (String((e as Error).message).includes("UNIQUE")) {
-        throw new HttpError(409, `${email}: github_login or claude_user_id is already used by another user`);
-      }
+      if (isUniqueViolation(e)) throw new HttpError(409, `${email}: github_login or claude_user_id is already used by another user`);
       throw e;
     }
-    if (status === "disabled") db.prepare("DELETE FROM web_sessions WHERE user_id = ?").run(u.id);
+    if (status === "disabled") await q.run("DELETE FROM web_sessions WHERE user_id = ?", u.id);
     // Re-activating someone the IdP deleted brings them back into SCIM as well.
-    if (status === "active") db.prepare("UPDATE users SET deleted_at = NULL WHERE id = ?").run(u.id);
-    audit(db, actor, "user.saved", { email, ...Object.fromEntries(sets) });
-    return getUser(db, u.id)!;
+    if (status === "active") await q.run("UPDATE users SET deleted_at = NULL WHERE id = ?", u.id);
+    await audit(q, actor, "user.saved", { email, ...Object.fromEntries(sets) });
+    return (await getUser(q, u.id))!;
   };
 
   r.post(
@@ -221,7 +232,11 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     wrap(async (req, res) => {
       const list = Array.isArray(req.body) ? req.body : [req.body];
       if (list.length > 5000) throw new HttpError(400, "at most 5000 users per call");
-      const saved = tx(db, () => list.map((b) => upsertUser(b, req.principal!.label)));
+      const saved = await db.tx(async (q) => {
+        const out: User[] = [];
+        for (const b of list) out.push(await upsertUser(q, b, req.principal!.label));
+        return out;
+      });
       // A role, status, team or budget change moves caps; push them now.
       await sync.pushCaps(saved.map((u) => u.id)).catch((e) => console.error("cap push failed:", e));
       res.status(201).json(saved.map(publicUser));
@@ -235,54 +250,62 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     wrap(async (_req, res) => res.json(await sync.run())),
   );
 
-  r.get("/admin/sync-runs", requireAdmin, (_req, res) => {
-    res.json(db.prepare("SELECT * FROM sync_runs ORDER BY id DESC LIMIT 50").all());
-  });
+  r.get("/admin/sync-runs", requireAdmin, wrap(async (_req, res) => res.json(await db.all("SELECT * FROM sync_runs ORDER BY id DESC LIMIT 50"))));
 
-  /** For tools without a connector yet (Cursor, Codex, ...): replace one tool's spend for a period. */
+  /** For tools without a connector yet (Codex, ...): replace one tool's spend for a period. */
   r.post(
     "/admin/spend-import",
     requireAdmin,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const { period = currentPeriod(), tool, rows } = req.body as { period?: string; tool?: string; rows?: unknown };
       if (!PERIOD_RE.test(period)) throw new HttpError(400, "period must be YYYY-MM");
-      if (!tool || !TOOL_RE.test(tool)) throw new HttpError(400, "tool must be a short lowercase key, e.g. cursor");
+      if (!tool || !TOOL_RE.test(tool)) throw new HttpError(400, "tool must be a short lowercase key, e.g. codex");
       if (sync.connectors.some((c) => c.tool === tool)) throw new HttpError(409, `${tool} is synced by a connector`);
       if (!Array.isArray(rows)) throw new HttpError(400, "rows must be an array of {email, usd}");
       const ts = nowIso();
       const missing: string[] = [];
-      tx(db, () => {
-        db.prepare("DELETE FROM spend WHERE period = ? AND tool = ?").run(period, tool);
-        const ins = db.prepare(
-          "INSERT INTO spend (period, user_id, tool, cents, synced_at) VALUES (?, ?, ?, ?, ?) " +
-            "ON CONFLICT(period, user_id, tool) DO UPDATE SET cents = cents + excluded.cents",
-        );
+      await db.tx(async (q) => {
+        await q.run("DELETE FROM spend WHERE period = ? AND tool = ?", period, tool);
         for (const row of rows as { email?: string; usd?: number }[]) {
-          const u = row.email ? getUserByEmail(db, row.email) : undefined;
+          const u = row.email ? await getUserByEmail(q, row.email) : undefined;
           const usd = Number(row.usd);
           if (!Number.isFinite(usd) || usd < 0) throw new HttpError(400, `bad usd for ${row.email}`);
           if (!u) missing.push(String(row.email));
-          else ins.run(period, u.id, tool, usdToCents(usd), ts);
+          else {
+            await q.run(
+              "INSERT INTO spend (period, user_id, tool, cents, synced_at) VALUES (?, ?, ?, ?, ?) " +
+                "ON CONFLICT(period, user_id, tool) DO UPDATE SET cents = spend.cents + excluded.cents",
+              period,
+              u.id,
+              tool,
+              usdToCents(usd),
+              ts,
+            );
+          }
         }
+        await audit(q, req.principal!.label, "spend.imported", { period, tool, rows: rows.length, missing });
       });
-      audit(db, req.principal!.label, "spend.imported", { period, tool, rows: rows.length, missing });
-      sync.pushCaps().catch((e) => console.error("cap push failed:", e));
+      await sync.pushCaps().catch((e) => console.error("cap push failed:", e));
       res.json({ imported: rows.length - missing.length, unknown_emails: missing });
     }),
   );
 
-  r.get("/admin/unmatched", requireAdmin, (req, res) => {
-    const period = String(req.query.period ?? currentPeriod());
-    res.json(db.prepare("SELECT * FROM unmatched_spend WHERE period = ? ORDER BY cents DESC").all(period));
-  });
+  r.get(
+    "/admin/unmatched",
+    requireAdmin,
+    wrap(async (req, res) => {
+      const period = String(req.query.period ?? currentPeriod());
+      res.json(await db.all("SELECT * FROM unmatched_spend WHERE period = ? ORDER BY cents DESC", period));
+    }),
+  );
 
   r.get(
     "/admin/report",
     requireAdmin,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const period = String(req.query.period ?? currentPeriod());
       if (!PERIOD_RE.test(period)) throw new HttpError(400, "period must be YYYY-MM");
-      const report = spendReport(db, cfg, period);
+      const report = await spendReport(db, cfg, period);
       if (req.query.format === "csv") {
         res.setHeader("content-type", "text/csv; charset=utf-8");
         res.setHeader("content-disposition", `attachment; filename="devhub-spend-${period}.csv"`);
@@ -292,27 +315,31 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     }),
   );
 
-  r.get("/admin/license", requireAdmin, (_req, res) => res.json(licenseStatus(db, cfg)));
+  r.get("/admin/license", requireAdmin, wrap(async (_req, res) => res.json(await licenseStatus(db, cfg))));
 
   r.put(
     "/admin/license",
     requireAdmin,
-    wrap((req, res) => {
+    wrap(async (req, res) => {
       const raw = req.body?.license_file;
       const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
       const parsed = parseAndVerify(text);
       if (!parsed.ok) throw new HttpError(400, parsed.error);
-      db.prepare(
+      await db.run(
         "INSERT INTO settings (key, value, updated_at) VALUES ('license', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-      ).run(text, nowIso());
-      audit(db, req.principal!.label, "license.installed", { id: parsed.license.id, seats: parsed.license.seats, expiresAt: parsed.license.expiresAt });
-      res.json(licenseStatus(db, cfg));
+        text,
+        nowIso(),
+      );
+      await audit(db, req.principal!.label, "license.installed", {
+        id: parsed.license.id,
+        seats: parsed.license.seats,
+        expiresAt: parsed.license.expiresAt,
+      });
+      res.json(await licenseStatus(db, cfg));
     }),
   );
 
-  r.get("/admin/audit", requireAdmin, (_req, res) => {
-    res.json(db.prepare("SELECT * FROM audit ORDER BY id DESC LIMIT 200").all());
-  });
+  r.get("/admin/audit", requireAdmin, wrap(async (_req, res) => res.json(await db.all("SELECT * FROM audit ORDER BY id DESC LIMIT 200"))));
 
   r.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });

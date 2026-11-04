@@ -35,6 +35,12 @@ variable "github_token" {
   sensitive = true
 }
 
+variable "database_url" {
+  description = "Managed Postgres (RDS, Cloud SQL, ...) for high availability."
+  type        = string
+  sensitive   = true
+}
+
 variable "license_file" {
   description = "Path to the signed license file from your vendor."
   type        = string
@@ -68,7 +74,11 @@ module "devhub" {
   }
   allowed_email_domains      = ["acme.io"]
   default_monthly_budget_usd = 300
-  claude_gateway_url         = "https://claude-gateway.acme.io"
+
+  database_type      = "postgres"
+  database_url       = var.database_url
+  replicas           = 2
+  claude_gateway_url = "https://claude-gateway.acme.io"
 
   connectors = {
     claude  = { mode = "gateway", baseUrl = "https://claude-gateway.acme.io", enforceCaps = true }

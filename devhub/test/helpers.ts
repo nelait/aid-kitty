@@ -1,8 +1,9 @@
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.js";
 import { loadConfig, type Config } from "../src/config.js";
+import pg from "pg";
 import { openDb, type Db } from "../src/db.js";
 import { issueLicense, setLicensePublicKeyForTests } from "../src/license.js";
 import { SyncService } from "../src/sync.js";
@@ -160,6 +161,39 @@ export class MockCursor {
   }
 }
 
+/**
+ * A fresh, empty database for one test file: in-memory SQLite by default, or a brand-new
+ * Postgres database when DEVHUB_TEST_DATABASE_URL points at a server (dropped afterwards).
+ */
+export async function freshDb(): Promise<{ db: Db; close(): Promise<void> }> {
+  const base = process.env.DEVHUB_TEST_DATABASE_URL;
+  if (!base) {
+    const db = await openDb(":memory:");
+    return { db, close: () => db.close() };
+  }
+  const name = `devhub_test_${randomBytes(6).toString("hex")}`;
+  const admin = async (sql: string) => {
+    const c = new pg.Client({ connectionString: base });
+    await c.connect();
+    try {
+      await c.query(sql);
+    } finally {
+      await c.end();
+    }
+  };
+  await admin(`CREATE DATABASE ${name}`);
+  const url = new URL(base);
+  url.pathname = `/${name}`;
+  const db = await openDb(url.toString());
+  return {
+    db,
+    async close() {
+      await db.close();
+      await admin(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    },
+  };
+}
+
 export interface Harness {
   db: Db;
   cfg: Config;
@@ -168,7 +202,7 @@ export interface Harness {
   claude: MockClaude;
   github: MockGitHub;
   cursor: MockCursor;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export async function harness(over: Partial<Config> = {}): Promise<Harness> {
@@ -188,7 +222,8 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     },
     ...over,
   });
-  const db = openDb(cfg.databasePath);
+  const store = await freshDb();
+  const db = store.db;
   const sync = new SyncService(db, cfg);
   const server = createServer(createApp(db, cfg, sync));
   const url = await listen(server);
@@ -201,12 +236,13 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     claude,
     github,
     cursor,
-    close() {
+    async close() {
+      server.closeAllConnections();
       server.close();
       cursor.close();
       claude.close();
       github.close();
-      db.close();
+      await store.close();
     },
   };
 }
