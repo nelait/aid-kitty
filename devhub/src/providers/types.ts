@@ -22,4 +22,9 @@ export interface WorkspaceProvider {
   describe(machineIds: string[]): Promise<Map<string, MachineState>>;
   /** How a developer reaches the machine, e.g. an SSH config block. */
   connectHint(machineId: string, workspaceName: string): string;
+  /**
+   * When the backend last saw someone use the machine (ISO time), from the latest describe().
+   * Only for backends that track activity themselves (Coder); others report through Dev Hub's agent.
+   */
+  lastActiveAt?(machineId: string): string | undefined;
 }

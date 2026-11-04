@@ -75,7 +75,8 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
           const hint = ws.hintFor(w) ?? "";
           return `<div class="card"><h2>${esc(w.name)} <span class="badge">${STATE_LABEL[w.state] ?? esc(w.state)}</span></h2>
             <p class="muted">${esc(tName.get(w.template_id) ?? "")} · ${perHour(w.hourly_usd_e4)}/hour while running · ${w.disk_gb} GB disk
-            ${w.stop_at && (w.state === "running" || w.state === "starting") ? `<br>Stops automatically at ${when(w.stop_at)}.` : ""}
+            ${w.stop_at && (w.state === "running" || w.state === "starting") ? `<br>Stops automatically at ${when(w.stop_at)}${w.idle_minutes ? `, or after ${w.idle_minutes} minutes without activity` : ""}.` : ""}
+            ${w.last_active_at && (w.state === "running" || w.state === "starting") ? `<br>Last active ${when(w.last_active_at)}.` : ""}
             ${w.detail ? `<br>${esc(w.detail)}` : ""}</p>
             ${actions(p, w, "/workspaces")}
             ${hint ? `<details style="margin-top:10px"><summary>Connect with VS Code or SSH</summary><pre>${esc(hint)}</pre>
@@ -98,7 +99,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
                   ? `<form method="post" action="/workspaces/new" class="row">${csrfField(p)}
                       <div><label>Name</label><input name="name" required pattern="[a-z][a-z0-9-]{1,30}[a-z0-9]" placeholder="e.g. payments"></div>
                       <div><label>Template</label><select name="template_id">${options(
-                        templates.map((t): [string, string] => [String(t.id), `${t.name} (${perHour(t.hourly_usd_e4)}/hour, stops after ${t.stop_after_hours}h)`]),
+                        templates.map((t): [string, string] => [String(t.id), `${t.name} (${perHour(t.hourly_usd_e4)}/hour, stops after ${t.stop_after_hours}h${t.idle_minutes ? ` or ${t.idle_minutes} min idle` : ""})`]),
                         String(templates[0].id),
                       )}</select></div>
                       <div style="flex:0 0 auto;min-width:0"><button>Create</button></div></form>`
@@ -247,6 +248,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
         <div><label>Price per running hour (USD)</label><input name="hourly_usd" type="number" min="0" step="0.0001" value="${t ? t.hourly_usd_e4 / 10_000 : ""}" required placeholder="0.1664"></div>
         <div><label>Disk price per GB-month (USD)</label><input name="storage_gb_month_usd" type="number" min="0" step="0.001" value="${t ? t.storage_gb_month_cents / 100 : "0.08"}"></div>
         <div><label>Stop automatically after (hours)</label><input name="stop_after_hours" type="number" min="1" max="24" value="${t?.stop_after_hours ?? 8}"></div>
+        <div><label>Stop when idle for (minutes, 0 = never)</label><input name="idle_minutes" type="number" min="0" max="480" value="${t?.idle_minutes ?? 30}"></div>
         <div><label>Available</label><select name="enabled">${options([["1", "Yes"], ["0", "No (hidden from developers)"]], t ? String(t.enabled) : "1")}</select></div>
       </div>
       <p><button>${label}</button></p></form>`;
@@ -264,6 +266,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
     hourly_usd: req.body.hourly_usd,
     storage_gb_month_usd: req.body.storage_gb_month_usd || 0.08,
     stop_after_hours: Number(req.body.stop_after_hours || 8),
+    idle_minutes: req.body.idle_minutes === undefined || req.body.idle_minutes === "" ? 30 : Number(req.body.idle_minutes),
     enabled: req.body.enabled !== "0",
     config: Object.fromEntries(
       (CONFIG_FIELDS[kind] ?? []).map((k) => [k, k === "diskGb" ? Number(req.body[k] || 0) : req.body[k]]),
@@ -294,27 +297,28 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
           p,
           `${flash(req)}<h1>Admin</h1>${adminTabs("/admin/workspaces")}
           <div class="card scroll"><h2>Workspaces (${running.length} running of ${all.length})</h2>
-            <table><thead><tr><th>Person</th><th>Workspace</th><th>Template</th><th>State</th><th>Auto-stop</th><th class="n">Person's cost this month</th><th></th></tr></thead><tbody>
+            <table><thead><tr><th>Person</th><th>Workspace</th><th>Template</th><th>State</th><th>Auto-stop</th><th>Last active</th><th class="n">Person's cost this month</th><th></th></tr></thead><tbody>
             ${
               all
                 .map(
                   (w) => `<tr><td>${esc(w.email)}</td><td>${esc(w.name)}<div class="muted"><code>${esc(w.machine_id ?? "")}</code></div></td><td>${esc(w.template)}</td>
                   <td>${STATE_LABEL[w.state] ?? esc(w.state)}</td><td>${w.state === "running" || w.state === "starting" ? when(w.stop_at) : ""}</td>
+                  <td>${w.state === "running" || w.state === "starting" ? (w.last_active_at ? when(w.last_active_at) : w.idle_minutes ? `<span class="muted">no reports yet</span>` : "") : ""}</td>
                   <td class="n">${fmtUsd(costs.get(w.user_id) ?? 0)}</td><td>${actions(p, w, "/admin/workspaces", "admin")}</td></tr>`,
                 )
-                .join("") || `<tr><td colspan="7" class="muted">No workspaces.</td></tr>`
+                .join("") || `<tr><td colspan="8" class="muted">No workspaces.</td></tr>`
             }</tbody></table></div>
           <div class="card scroll"><h2>Templates</h2>
-            <table><thead><tr><th>Name</th><th>Backend</th><th>Machine</th><th class="n">Per hour</th><th class="n">Auto-stop</th><th>Available</th></tr></thead><tbody>
+            <table><thead><tr><th>Name</th><th>Backend</th><th>Machine</th><th class="n">Per hour</th><th class="n">Auto-stop</th><th class="n">Idle stop</th><th>Available</th></tr></thead><tbody>
             ${
               templates
                 .map(
                   (t) => `<tr><td><a href="/admin/workspaces/templates/${t.id}">${esc(t.name)}</a></td>
                     <td>${esc(PROVIDER_LABELS[t.provider] ?? t.provider)}${ws.providers.has(t.provider) ? "" : ` <span class="badge">not configured</span>`}</td>
                     <td>${machineSummary(t)}</td>
-                    <td class="n">${perHour(t.hourly_usd_e4)}</td><td class="n">${t.stop_after_hours}h</td><td>${t.enabled ? "Yes" : "No"}</td></tr>`,
+                    <td class="n">${perHour(t.hourly_usd_e4)}</td><td class="n">${t.stop_after_hours}h</td><td class="n">${t.idle_minutes ? `${t.idle_minutes} min` : "Off"}</td><td>${t.enabled ? "Yes" : "No"}</td></tr>`,
                 )
-                .join("") || `<tr><td colspan="6" class="muted">No templates yet.</td></tr>`
+                .join("") || `<tr><td colspan="7" class="muted">No templates yet.</td></tr>`
             }</tbody></table></div>
           <div class="card"><h2>Add a template</h2>
             ${[...ws.providers.keys()]

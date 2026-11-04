@@ -223,10 +223,19 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     if (w.user_id !== u.id || w.state === "terminated") throw new HttpError(404, "workspace not found");
     return { u, w };
   };
-  const withHint = (w: Awaited<ReturnType<typeof ws.get>>) => ({
-    ...w,
-    connect: ws.hintFor(w),
-  });
+  const withHint = (w: Awaited<ReturnType<typeof ws.get>>) => {
+    const { agent_token_hash: _secret, ...rest } = w;
+    return { ...rest, connect: ws.hintFor(w) };
+  };
+
+  // Called every minute by the activity agent on each workspace; authenticated by that machine's own token.
+  r.post(
+    "/workspaces/heartbeat",
+    wrap(async (req, res) => {
+      const m = /^Bearer\s+(\S+)$/i.exec(req.get("authorization") ?? "");
+      res.type("text/plain").send(await ws.heartbeat(m?.[1] ?? "", (req.body ?? {}) as Record<string, unknown>));
+    }),
+  );
 
   r.get(
     "/me/workspaces",
@@ -285,7 +294,7 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     requireAdmin,
     wrap(async (req, res) => res.json(await ws.saveTemplate(Number(req.params.id), req.body ?? {}, req.principal!.label))),
   );
-  r.get("/admin/workspaces", requireAdmin, wrap(async (_req, res) => res.json(await ws.listAll())));
+  r.get("/admin/workspaces", requireAdmin, wrap(async (_req, res) => res.json((await ws.listAll()).map(({ agent_token_hash: _secret, ...w }) => w))));
   r.post(
     "/admin/workspaces/:id/:action(stop|delete)",
     requireAdmin,

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type { Config } from "./config.js";
 import type { Connector, SpendRow } from "./connectors/types.js";
 import { audit, insertId, isUniqueViolation, type Db, type Queryable, type User } from "./db.js";
@@ -22,6 +23,8 @@ export interface WorkspaceTemplate {
   storage_gb_month_cents: number;
   stop_after_hours: number;
   enabled: number;
+  /** Stop a running workspace after this many minutes without activity; 0 = never. */
+  idle_minutes: number;
 }
 
 export interface Workspace {
@@ -39,11 +42,20 @@ export interface Workspace {
   stop_at: string | null;
   created_at: string;
   terminated_at: string | null;
+  idle_minutes: number;
+  /** Last time anyone used it (agent heartbeat with activity, or the backend's own tracking). */
+  last_active_at: string | null;
+  /** Last heartbeat from Dev Hub's agent, active or not. Null means the agent has never reported. */
+  last_heartbeat_at: string | null;
+  agent_token_hash: string | null;
 }
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
 const SSH_KEY_RE = /^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]{40,}( [\w.@+-]{0,100})?$/;
 const MAX_EXTEND_HOURS = 12;
+/** 1-minute load average per CPU at or above this counts as activity (a build, tests, an agent working). */
+const ACTIVE_LOAD_PER_CPU = 0.3;
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export function validateSshKey(raw: string): string {
   const key = raw.trim().replace(/\s+/g, " ");
@@ -51,8 +63,26 @@ export function validateSshKey(raw: string): string {
   return key;
 }
 
-/** cloud-init script: a `dev` user with the developer's key, Claude Code, and Dev Hub's policy helper. */
-export function userData(cfg: Config, user: User, sshKey: string): string {
+/**
+ * The activity agent: every minute it reports open SSH sessions (which is how VS Code
+ * Remote-SSH, Session Manager and IAP tunnels all arrive) and CPU load to Dev Hub. Dev Hub
+ * decides whether that counts as activity, and may answer with a warning to show logged-in users.
+ */
+const AGENT_SCRIPT = `#!/bin/sh
+# Dev Hub activity agent. Reports to Dev Hub so idle workspaces can be stopped.
+. /etc/devhub/agent.env
+SSH=$(ss -Htn state established '( sport = :22 )' 2>/dev/null | wc -l)
+LOAD=$(cut -d' ' -f1 /proc/loadavg)
+CPUS=$(nproc 2>/dev/null || echo 1)
+WARN=$(curl -fsS --max-time 10 -X POST "$DEVHUB_URL/api/workspaces/heartbeat" \\
+  -H "authorization: Bearer $DEVHUB_AGENT_TOKEN" -H "content-type: application/json" \\
+  -d "{\\"ssh\\":$SSH,\\"load1\\":$LOAD,\\"cpus\\":$CPUS}" 2>/dev/null) || exit 0
+[ -n "$WARN" ] && wall "$WARN" 2>/dev/null
+exit 0
+`;
+
+/** cloud-init script: a `dev` user with the developer's key, Claude Code, Dev Hub's policy helper and activity agent. */
+export function userData(cfg: Config, user: User, sshKey: string, agentToken = ""): string {
   const env = [`DEVHUB_URL=${cfg.publicUrl}`, `DEVHUB_POLICY_TOKEN=${cfg.policyToken ?? ""}`, `DEVHUB_USER_EMAIL=${user.email}`].join("\n");
   return `#!/bin/bash
 # Dev Hub workspace setup for ${user.email}. Expects an Ubuntu or Debian image with the SSM agent.
@@ -79,6 +109,34 @@ chmod 755 /usr/local/bin/devhub-policy
 cat > /etc/claude-code/managed-settings.json <<'DEVHUB_SETTINGS'
 { "policyHelper": { "path": "/usr/local/bin/devhub-policy", "timeoutMs": 5000, "refreshIntervalMs": 900000 } }
 DEVHUB_SETTINGS
+
+# Activity agent (root-only token), run every minute by a systemd timer.
+umask 077
+cat > /etc/devhub/agent.env <<'DEVHUB_AGENT_ENV'
+DEVHUB_URL=${cfg.publicUrl}
+DEVHUB_AGENT_TOKEN=${agentToken}
+DEVHUB_AGENT_ENV
+umask 022
+cat > /usr/local/bin/devhub-agent <<'DEVHUB_AGENT'
+${AGENT_SCRIPT}DEVHUB_AGENT
+chmod 755 /usr/local/bin/devhub-agent
+cat > /etc/systemd/system/devhub-agent.service <<'DEVHUB_UNIT'
+[Unit]
+Description=Dev Hub activity agent
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/devhub-agent
+DEVHUB_UNIT
+cat > /etc/systemd/system/devhub-agent.timer <<'DEVHUB_TIMER'
+[Unit]
+Description=Report workspace activity to Dev Hub every minute
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+[Install]
+WantedBy=timers.target
+DEVHUB_TIMER
+systemctl daemon-reload && systemctl enable --now devhub-agent.timer
 
 # Tools: git, Node.js 22 and Claude Code.
 export DEBIAN_FRONTEND=noninteractive
@@ -162,18 +220,21 @@ export class WorkspaceService {
     if (!Number.isFinite(storage) || storage < 0 || storage > 10) throw new HttpError(400, "storage_gb_month_usd must be between 0 and 10");
     if (!Number.isInteger(stopAfter) || stopAfter < 1 || stopAfter > 24) throw new HttpError(400, "stop_after_hours must be a whole number from 1 to 24");
     const enabled = b.enabled === false || b.enabled === "0" ? 0 : 1;
+    const idle = Number(b.idle_minutes ?? 30);
+    if (!Number.isInteger(idle) || idle < 0 || idle > 480) throw new HttpError(400, "idle_minutes must be a whole number from 0 (never) to 480");
+    if (idle > 0 && idle < 10) throw new HttpError(400, "idle_minutes must be 0 (never) or at least 10, so a short break doesn't stop a workspace");
     // Hourly prices keep 4 decimals (AWS lists e.g. $0.1664), so they're stored in 1/10,000 USD.
-    const values = [name, kind, JSON.stringify(config), Math.round(hourly * 10_000), Math.round(storage * 100), stopAfter, enabled] as const;
+    const values = [name, kind, JSON.stringify(config), Math.round(hourly * 10_000), Math.round(storage * 100), stopAfter, enabled, idle] as const;
     try {
       if (id === null) {
         id = await insertId(
           this.db,
-          "INSERT INTO workspace_templates (name, provider, config, hourly_usd_e4, storage_gb_month_cents, stop_after_hours, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO workspace_templates (name, provider, config, hourly_usd_e4, storage_gb_month_cents, stop_after_hours, enabled, idle_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
           ...values,
         );
       } else {
         const r = await this.db.run(
-          "UPDATE workspace_templates SET name = ?, provider = ?, config = ?, hourly_usd_e4 = ?, storage_gb_month_cents = ?, stop_after_hours = ?, enabled = ? WHERE id = ?",
+          "UPDATE workspace_templates SET name = ?, provider = ?, config = ?, hourly_usd_e4 = ?, storage_gb_month_cents = ?, stop_after_hours = ?, enabled = ?, idle_minutes = ? WHERE id = ?",
           ...values,
           id,
         );
@@ -185,7 +246,7 @@ export class WorkspaceService {
       }
       throw e;
     }
-    await audit(this.db, actor, "workspace.template.saved", { id, name, provider: kind, config, hourly_usd: hourly, stopAfter, enabled });
+    await audit(this.db, actor, "workspace.template.saved", { id, name, provider: kind, config, hourly_usd: hourly, stopAfter, enabled, idleMinutes: idle });
     return (await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ?", id))!;
   }
 
@@ -227,6 +288,8 @@ export class WorkspaceService {
         ws.hourly_usd_e4,
         this.iso(),
       );
+      // A fresh start counts as activity, so the idle clock gives a full window from here.
+      await q.run("UPDATE workspaces SET last_active_at = ? WHERE id = ?", this.iso(), ws.id);
     }
   }
 
@@ -255,9 +318,11 @@ export class WorkspaceService {
     await this.budgetCheck(user);
 
     const disk = Number(JSON.parse(t.config).diskGb ?? 0);
+    // Each machine gets its own token for the activity agent; only its hash is stored.
+    const agentToken = provider.usesSetupScript ? randomBytes(32).toString("base64url") : null;
     const id = await insertId(
       this.db,
-      "INSERT INTO workspaces (user_id, template_id, name, provider, state, disk_gb, hourly_usd_e4, storage_gb_month_cents, created_at) VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?)",
+      "INSERT INTO workspaces (user_id, template_id, name, provider, state, disk_gb, hourly_usd_e4, storage_gb_month_cents, created_at, idle_minutes, agent_token_hash) VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?)",
       user.id,
       t.id,
       name,
@@ -266,10 +331,12 @@ export class WorkspaceService {
       t.hourly_usd_e4,
       t.storage_gb_month_cents,
       this.iso(),
+      t.idle_minutes,
+      agentToken ? sha256(agentToken) : null,
     );
     let ws = await this.get(id);
     try {
-      const setup = provider.usesSetupScript ? userData(this.cfg, user, sshKey!.k!) : "";
+      const setup = provider.usesSetupScript ? userData(this.cfg, user, sshKey!.k!, agentToken!) : "";
       const machineId = await provider.create(JSON.parse(t.config), { workspaceId: id, name, ownerEmail: user.email, userData: setup });
       await this.db.tx(async (q) => {
         await this.setState(q, ws, "starting", { machine_id: machineId, stop_at: this.iso(this.now() + t.stop_after_hours * 3_600_000), detail: null });
@@ -292,18 +359,18 @@ export class WorkspaceService {
     const provider = this.need(ws.provider);
     await this.cloud("start the workspace", () => provider.start(ws.machine_id!));
     await this.db.tx(async (q) => {
-      await this.setState(q, ws, "starting", { stop_at: this.iso(this.now() + (t?.stop_after_hours ?? 8) * 3_600_000) });
+      await this.setState(q, ws, "starting", { stop_at: this.iso(this.now() + (t?.stop_after_hours ?? 8) * 3_600_000), detail: null });
       await this.openRun(q, ws);
     });
     await audit(this.db, actor, "workspace.started", { id: ws.id });
   }
 
-  async stop(ws: Workspace, actor: string, reason = "workspace.stopped") {
+  async stop(ws: Workspace, actor: string, reason = "workspace.stopped", detail: string | null = null) {
     if (!["running", "starting"].includes(ws.state)) throw new HttpError(409, `The workspace is ${ws.state}; only a running workspace can be stopped.`);
     const provider = this.need(ws.provider);
     await this.cloud("stop the workspace", () => provider.stop(ws.machine_id!));
     await this.db.tx(async (q) => {
-      await this.setState(q, ws, "stopping", { stop_at: null });
+      await this.setState(q, ws, "stopping", { stop_at: null, detail });
       await this.closeRun(q, ws);
     });
     await audit(this.db, actor, reason, { id: ws.id });
@@ -315,6 +382,8 @@ export class WorkspaceService {
     const base = Math.max(now, ws.stop_at ? Date.parse(ws.stop_at) : now);
     const until = Math.min(base + hours * 3_600_000, now + MAX_EXTEND_HOURS * 3_600_000);
     await this.setState(this.db, ws, ws.state, { stop_at: this.iso(until) });
+    // Asking to keep it running counts as activity, so the idle clock restarts too.
+    await this.db.run("UPDATE workspaces SET last_active_at = ? WHERE id = ?", this.iso(now), ws.id);
     await audit(this.db, actor, "workspace.extended", { id: ws.id, until: this.iso(until) });
     return this.iso(until);
   }
@@ -357,9 +426,25 @@ export class WorkspaceService {
         if (actual === "running" || actual === "starting") await this.openRun(q, ws);
         else if (actual === "stopped" || actual === "terminated") await this.closeRun(q, ws);
       });
-      if (actual === "running" && ws.stop_at && Date.parse(ws.stop_at) <= this.now()) {
+      if (actual !== "running") continue;
+
+      // Backends that track activity themselves (Coder) feed the same idle clock.
+      let cur = await this.get(ws.id);
+      const seen = this.providers.get(ws.provider)!.lastActiveAt?.(ws.machine_id!);
+      if (seen && (!cur.last_active_at || seen > cur.last_active_at)) {
+        await this.db.run("UPDATE workspaces SET last_active_at = ? WHERE id = ?", seen, ws.id);
+        cur = { ...cur, last_active_at: seen };
+      }
+
+      let stopWith: [string, string] | null = null;
+      if (cur.stop_at && Date.parse(cur.stop_at) <= this.now()) {
+        stopWith = ["workspace.autostopped", "Stopped at its scheduled time."];
+      } else if (this.idleStopDue(cur, seen !== undefined)) {
+        stopWith = ["workspace.idle_stopped", `Stopped after ${cur.idle_minutes} minutes without activity.`];
+      }
+      if (stopWith) {
         try {
-          await this.stop({ ...ws, state: "running" }, "system", "workspace.autostopped");
+          await this.stop({ ...cur, state: "running" }, "system", stopWith[0], stopWith[1]);
           autoStopped++;
         } catch (e) {
           console.error(`auto-stop of workspace ${ws.id} failed:`, (e as Error).message);
@@ -367,6 +452,68 @@ export class WorkspaceService {
       }
     }
     return { checked: live.length, autoStopped };
+  }
+
+  /** When an idle workspace will be stopped, or null if idle stopping doesn't apply to it. */
+  idleStopAt(w: Workspace): number | null {
+    if (!w.idle_minutes || !w.last_active_at) return null;
+    return Date.parse(w.last_active_at) + w.idle_minutes * 60_000;
+  }
+
+  /**
+   * Idle-stop only on evidence: Dev Hub's agent has reported at least once, or the backend
+   * tracks activity. A machine whose agent never reports falls back to the scheduled stop,
+   * so a broken agent can't cut someone off mid-session.
+   */
+  private idleStopDue(w: Workspace, backendTracksActivity: boolean): boolean {
+    const at = this.idleStopAt(w);
+    if (at === null) return false;
+    if (!w.last_heartbeat_at && !backendTracksActivity) return false;
+    return at <= this.now();
+  }
+
+  /**
+   * A heartbeat from a workspace's activity agent. Open SSH sessions or real CPU load count as
+   * activity. Returns a warning for the agent to show logged-in users, or "" for none.
+   */
+  async heartbeat(token: string, b: Record<string, unknown>): Promise<string> {
+    if (!token) throw new HttpError(401, "agent token required");
+    const ws = await this.db.get<Workspace>(
+      "SELECT * FROM workspaces WHERE agent_token_hash = ? AND state NOT IN ('terminated', 'error')",
+      sha256(token),
+    );
+    if (!ws) throw new HttpError(401, "unknown agent token");
+    const num = (v: unknown, max: number) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? Math.min(n, max) : 0;
+    };
+    const ssh = num(b.ssh, 10_000);
+    const load = num(b.load1, 10_000);
+    const cpus = Math.max(1, num(b.cpus, 1024));
+    const active = ssh > 0 || load / cpus >= ACTIVE_LOAD_PER_CPU;
+    const now = this.iso();
+    await this.db.run(
+      `UPDATE workspaces SET last_heartbeat_at = ?${active ? ", last_active_at = ?" : ""} WHERE id = ?`,
+      ...(active ? [now, now, ws.id] : [now, ws.id]),
+    );
+    if (ws.state !== "running" && ws.state !== "starting") return "";
+
+    // Warn at 15, 5 and 1 minutes before a scheduled stop, and 5 and 1 minutes before an idle stop.
+    const minsLeft = (at: number) => Math.ceil((at - this.now()) / 60_000);
+    if (ws.stop_at) {
+      const m = minsLeft(Date.parse(ws.stop_at));
+      if ([15, 5, 1].includes(m)) {
+        return `Dev Hub: this workspace stops in ${m} minute${m === 1 ? "" : "s"} (${ws.stop_at.slice(11, 16)} UTC). Keep it running from the Workspaces page: ${this.cfg.publicUrl}/workspaces`;
+      }
+    }
+    const idleAt = active ? null : this.idleStopAt(ws);
+    if (idleAt !== null) {
+      const m = minsLeft(idleAt);
+      if ([5, 1].includes(m)) {
+        return `Dev Hub: no activity on this workspace for a while; it stops in ${m} minute${m === 1 ? "" : "s"} unless it's used.`;
+      }
+    }
+    return "";
   }
 
   /** Month-to-date workspace cost per user, in cents: running hours plus disk storage. */

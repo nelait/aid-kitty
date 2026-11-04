@@ -162,7 +162,8 @@ CREATE TABLE IF NOT EXISTS workspace_templates (
   hourly_usd_e4 INTEGER NOT NULL,
   storage_gb_month_cents INTEGER NOT NULL,
   stop_after_hours INTEGER NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1
+  enabled INTEGER NOT NULL DEFAULT 1,
+  idle_minutes INTEGER NOT NULL DEFAULT 30
 );
 CREATE TABLE IF NOT EXISTS workspaces (
   id ${pk},
@@ -178,8 +179,13 @@ CREATE TABLE IF NOT EXISTS workspaces (
   storage_gb_month_cents INTEGER NOT NULL,
   stop_at TEXT,
   created_at TEXT NOT NULL,
-  terminated_at TEXT
+  terminated_at TEXT,
+  idle_minutes INTEGER NOT NULL DEFAULT 0,
+  last_active_at TEXT,
+  last_heartbeat_at TEXT,
+  agent_token_hash TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS workspaces_agent_token ON workspaces (agent_token_hash);
 CREATE TABLE IF NOT EXISTS workspace_runs (
   id ${pk},
   workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
@@ -291,6 +297,11 @@ async function openSqlite(path: string): Promise<Db> {
   addColumn("users", "deleted_at", "TEXT");
   addColumn("teams", "scim_external_id", "TEXT");
   addColumn("users", "ssh_public_key", "TEXT");
+  addColumn("workspace_templates", "idle_minutes", "INTEGER NOT NULL DEFAULT 30");
+  addColumn("workspaces", "idle_minutes", "INTEGER NOT NULL DEFAULT 0");
+  addColumn("workspaces", "last_active_at", "TEXT");
+  addColumn("workspaces", "last_heartbeat_at", "TEXT");
+  addColumn("workspaces", "agent_token_hash", "TEXT");
   s.exec(schema("sqlite"));
   // Earlier versions matched emails and GitHub logins case-insensitively in SQL; now the
   // app stores them lowercase so the same queries work on Postgres.
@@ -367,6 +378,11 @@ async function openPostgres(url: string): Promise<Db> {
     for (const stmt of schema("postgres").split(";").map((x) => x.trim()).filter(Boolean)) await q.run(stmt);
     // Columns added after a table first shipped.
     await q.run("ALTER TABLE users ADD COLUMN IF NOT EXISTS ssh_public_key TEXT");
+    await q.run("ALTER TABLE workspace_templates ADD COLUMN IF NOT EXISTS idle_minutes INTEGER NOT NULL DEFAULT 30");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS idle_minutes INTEGER NOT NULL DEFAULT 0");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS last_active_at TEXT");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS last_heartbeat_at TEXT");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS agent_token_hash TEXT");
   });
   return db;
 }

@@ -105,6 +105,7 @@ class MockCoder {
   created: { user: string; body: Record<string, unknown> }[] = [];
   builds: { id: string; transition: string }[] = [];
   status = new Map<string, string>();
+  lastUsed = new Map<string, string>();
   private server = createServer(async (req, res) => {
     const send = (code: number, body: unknown) => res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
     if (req.headers["coder-session-token"] !== this.token) return send(401, { message: "You must be logged in." });
@@ -134,7 +135,7 @@ class MockCoder {
     }
     if (req.method === "GET" && (m = u.pathname.match(/^\/api\/v2\/workspaces\/([^/]+)$/))) {
       if (!this.status.has(m[1])) return send(404, { message: "Resource not found." });
-      return send(200, { id: m[1], latest_build: { status: this.status.get(m[1]) } });
+      return send(200, { id: m[1], latest_build: { status: this.status.get(m[1]) }, last_used_at: this.lastUsed.get(m[1]) ?? "0001-01-01T00:00:00Z" });
     }
     send(404, { message: "no route" });
   });
@@ -165,6 +166,11 @@ test("Coder: creates the workspace for the person's Coder account from the named
     const states = await p.describe(["ws-1", "ws-2", "ws-missing"]);
     assert.deepEqual([...states], [["ws-1", "stopped"], ["ws-2", "running"]]);
     assert.match(p.connectHint(id, "payments"), /coder config-ssh[\s\S]*ssh coder\.payments/);
+    // Coder's own activity tracking feeds idle detection; its "never used" zero date doesn't.
+    assert.equal(p.lastActiveAt("ws-2"), undefined);
+    coder.lastUsed.set("ws-2", "2026-11-04T09:12:30.123456Z");
+    await p.describe(["ws-2"]);
+    assert.equal(p.lastActiveAt("ws-2"), "2026-11-04T09:12:30.123Z");
   } finally {
     coder.close();
   }

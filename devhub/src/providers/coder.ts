@@ -110,12 +110,20 @@ export class CoderProvider implements WorkspaceProvider {
     }
   }
 
+  private lastUsed = new Map<string, string>();
+
+  lastActiveAt(id: string): string | undefined {
+    return this.lastUsed.get(id);
+  }
+
   async describe(ids: string[]): Promise<Map<string, MachineState>> {
     const out = new Map<string, MachineState>();
     for (const id of ids) {
       try {
-        const ws = await this.call<{ latest_build?: { status?: string } }>("GET", `/workspaces/${encodeURIComponent(id)}`);
+        const ws = await this.call<{ latest_build?: { status?: string }; last_used_at?: string }>("GET", `/workspaces/${encodeURIComponent(id)}`);
         out.set(id, STATE[ws.latest_build?.status ?? ""] ?? "starting");
+        // Coder updates last_used_at as people connect (SSH, IDE, apps); it drives idle detection.
+        if (ws.last_used_at && !ws.last_used_at.startsWith("0001-")) this.lastUsed.set(id, new Date(ws.last_used_at).toISOString());
       } catch (e) {
         if ((e as { status?: number }).status !== 404) throw e; // deleted in Coder: gone
       }

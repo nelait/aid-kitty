@@ -80,7 +80,14 @@ Developers create cloud development machines from **Workspaces** in the portal, 
 
 Set `DEVHUB_POLICY_TOKEN` so AWS and GCP workspaces can fetch the Claude Code policy.
 
-**Not yet:** idle detection (stopping is time-based), stopping running workspaces automatically when a budget runs out, and custom setup scripts per template.
+**Idle stop.** Each template has a "stop when idle" limit (default 30 minutes, 0 turns it off, otherwise 10 to 480). A workspace counts as in use while anyone is connected over SSH (which includes VS Code Remote-SSH) or while its 1-minute load average is at least 0.3 per CPU, so builds, test runs and agents left working keep it running. Starting a workspace or choosing "Keep running" also counts as use.
+
+- **AWS and GCP:** the setup script installs a small agent (`/usr/local/bin/devhub-agent`, run every minute by a systemd timer) that reports to `POST /api/workspaces/heartbeat` with a token unique to that machine. Dev Hub stores only a hash of the token, and it stops working when the workspace is deleted. Workspaces need outbound HTTPS to Dev Hub's public URL (they already do for the policy helper).
+- **Coder:** Dev Hub uses Coder's own `last_used_at`, which Coder updates as people connect; no agent needed.
+- Logged-in users get a terminal message 5 and 1 minutes before an idle stop, and 15, 5 and 1 minutes before a scheduled stop.
+- If a machine's agent has never reported (blocked network, custom image), Dev Hub doesn't idle-stop it; the scheduled stop still applies. The admin page shows "no reports yet" for those.
+
+**Not yet:** stopping running workspaces automatically when a budget runs out, and custom setup scripts per template.
 
 ## Return on spend
 
@@ -369,7 +376,8 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |
 | **Done (Phase 2b)** | Google Compute Engine and Coder workspace backends alongside AWS | Workspaces wherever the customer runs |
-| Phase 2c | Idle detection; stop workspaces when a budget runs out | |
+| **Done (Phase 2c)** | Idle detection: stop workspaces nobody is using (agent on AWS/GCP, Coder's own activity), with terminal warnings | Idle machines stop costing money in 30 minutes, not 8 hours |
+| P1 | Stop running workspaces when a budget runs out | |
 | Phase 3 | Per-PR preview environments with TTL | |
 
 ## Connector notes
