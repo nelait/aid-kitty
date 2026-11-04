@@ -1,5 +1,5 @@
 {
-  "//": "Secrets come from env: OIDC_CLIENT_SECRET, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, DEVHUB_ADMIN_TOKEN.",
+  "//": "Secrets come from env: OIDC_CLIENT_SECRET, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY, DEVHUB_ADMIN_TOKEN.",
   "publicUrl": "https://devhub.acme.internal",
   "databasePath": "/var/lib/devhub/devhub.db",
   "claudeGatewayUrl": "https://claude-gateway.acme.internal",
@@ -24,7 +24,12 @@
     "copilot": {
       "org": "acme",
       "apiUrl": "https://api.github.com",
-      "seatPriceUsd": { "business": 19, "enterprise": 39 }
+      "seatPriceUsd": { "business": 19, "enterprise": 39 },
+      "premiumRequests": true,
+      "premiumRefreshMinutes": 60
+    },
+    "cursor": {
+      "apiUrl": "https://api.cursor.com"
     }
   },
   "syncIntervalSeconds": 300

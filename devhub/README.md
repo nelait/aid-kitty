@@ -17,7 +17,7 @@ Dev Hub doesn't rebuild any of that. It sits above the gateway and adds what the
 
 | Gap in the gateway | What Dev Hub adds |
 | --- | --- |
-| Caps cover Claude only | **One wallet** covering Claude, GitHub Copilot and any other tool (Cursor, Codex) via import. Dev Hub sets the Claude cap to *Claude spend so far + what's left in the wallet*, so the total across all tools stays inside the budget. |
+| Caps cover Claude only | **One wallet** covering Claude, GitHub Copilot (seats + premium-request overage), Cursor, and any other tool via import. Dev Hub sets the Claude cap to *Claude spend so far + what's left in the wallet*, so the total across all tools stays inside the budget. |
 | Group caps are per-seat defaults, not shared pools | **Team pools**: an optional monthly pool per team that clamps every member once it runs out. |
 | No increase-request queue ("`spend_limit_increase_requests` isn't part of the gateway's admin API") | **Raise requests** with manager approval and Slack notifications. An approval raises the Claude cap right away. |
 | No cost-center reporting | **Chargeback CSV** per person, team and cost center, with one column per tool. |
@@ -31,7 +31,9 @@ The same connector also works with the **Claude Enterprise Admin API** (`mode: "
  Okta ──OIDC──▶ Dev Hub portal + API ──(every 5 min)──┬─▶ Claude gateway / Enterprise Admin API
                  │  wallet, approvals, chargeback     │     GET  /v1/organizations/spend_limits/effective
                  │  SQLite                            │     POST /v1/organizations/spend_limits  (per-user cap)
-                 │                                    └─▶ GitHub  GET /orgs/{org}/copilot/billing/seats
+                 │                                    ├─▶ GitHub  GET /orgs/{org}/copilot/billing/seats
+                 │                                    │           GET /organizations/{org}/settings/billing/premium_request/usage?user=
+                 │                                    └─▶ Cursor  POST /teams/spend
  Developer ─ claude /login → Cloud gateway ─────────────▶ Claude apps gateway ─▶ Anthropic / Bedrock / Vertex
 ```
 
@@ -47,7 +49,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 21 tests: wallet math, sync against mock Claude/GitHub APIs, API + portal flows
+npm test                       # 26 tests: wallet math, sync against mock Claude/GitHub/Cursor APIs, API + portal flows
 npm run build && npm start
 ```
 
@@ -60,7 +62,8 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `OIDC_ADMIN_GROUP`, `OIDC_GROUPS_CLAIM` | IdP group that makes people Dev Hub admins; claim name (default `groups`) |
 | `CLAUDE_ADMIN_BASE_URL`, `CLAUDE_ADMIN_KEY`, `CLAUDE_MODE` | Gateway URL + an `admin.write_keys` key (`gateway`), or `https://api.anthropic.com` + a scoped key (`enterprise`) |
 | `CLAUDE_ENFORCE_CAPS` | `false` to report without setting caps |
-| `GITHUB_ORG`, `GITHUB_TOKEN` | Copilot seats; the token needs `manage_billing:copilot` or `read:org` |
+| `GITHUB_ORG`, `GITHUB_TOKEN` | Copilot seats and premium-request overage. The overage report requires an org admin's token; seats need `manage_billing:copilot` or `read:org` |
+| `CURSOR_API_KEY` | Cursor team spend (Cursor Admin API key) |
 | `DEVHUB_ADMIN_TOKEN` | Bearer token for automation (onboarding scripts, Terraform) |
 | `DEVHUB_SLACK_WEBHOOK_URL` | Notifications for requests and decisions |
 | `DEVHUB_DEV_LOGIN=true` | Email-only login for local development. **Never in production.** |
@@ -110,8 +113,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | Priority | Item | Why |
 | --- | --- | --- |
 | **Done (Phase 1a)** | Wallet, team pools, Claude + Copilot connectors, cap enforcement, raise requests and approvals, chargeback CSV, Okta SSO, portal | The governance wedge |
-| P1 | Copilot premium-request overage via GitHub's billing usage API | Seat price alone understates heavy Copilot users |
-| P1 | Cursor connector (Admin API) | Third most common tool |
+| **Done (Phase 1b)** | Copilot premium-request overage; Cursor connector | Heavy Copilot users and Cursor teams counted in the wallet |
 | P1 | SCIM endpoint for Okta provisioning and deprovisioning | Removes the manual user import |
 | P1 | Postgres option; Helm chart + Terraform module; signed license file | Self-hosted packaging for the license model |
 | P2 | Policy pack: generate the gateway's per-group `managed` blocks (MCP allowlist, permission denies) from one Dev Hub policy | One policy across tools |
@@ -119,4 +121,9 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | Phase 2 | Workspaces in the customer's AWS/GCP (Coder as a backend, or a built-in EC2/GCE template) | |
 | Phase 3 | Per-PR preview environments with TTL | |
 
-Known limits: amounts are the vendors' own estimates (a budget control, not an invoice). Copilot is priced from seat assignments in the config. Several people drawing on a team pool at the same moment can overshoot it by up to one sync interval of spend.
+## Connector notes
+
+- **Copilot overage.** GitHub breaks premium-request usage down per user only when filtered by `user`, so Dev Hub makes one call per seat. It caches the results and refreshes them every `premiumRefreshMinutes` (default 60), with at most four requests in flight. Only Copilot line items count, at `netAmount` (after the plan's included allowance). Set `premiumRequests: false` to count seats only.
+- **Cursor.** Spend is read per member and matched by email. Cursor reports spend for the team's billing cycle, which may not start on the 1st; Dev Hub treats it as the current month's spend. **The request and response shape was written from memory and has not been checked against Cursor's docs or a live team** (Cursor's docs weren't reachable from the build environment). The connector checks the response strictly and fails the pull rather than record wrong numbers. Verify it against a real team before relying on it.
+
+Known limits: amounts are the vendors' own estimates (a budget control, not an invoice). Copilot seats are priced from the config. Several people drawing on a team pool at the same moment can overshoot it by up to one sync interval of spend.

@@ -30,6 +30,15 @@ export interface CopilotConnectorConfig {
   apiUrl: string;
   /** Monthly seat price by plan type, USD. */
   seatPriceUsd: Record<string, number>;
+  /** Add premium-request overage from GitHub's billing usage API (default true). */
+  premiumRequests?: boolean;
+  /** How often to refresh per-user overage; one API call per seat (default 60). */
+  premiumRefreshMinutes?: number;
+}
+
+export interface CursorConnectorConfig {
+  apiKey: string;
+  apiUrl: string;
 }
 
 export interface Config {
@@ -56,6 +65,7 @@ export interface Config {
   connectors: {
     claude?: ClaudeConnectorConfig;
     copilot?: CopilotConnectorConfig;
+    cursor?: CursorConnectorConfig;
   };
   syncIntervalSeconds: number;
   notify: { slackWebhookUrl?: string };
@@ -127,10 +137,28 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
       seatPriceUsd: { business: 19, enterprise: 39 },
     };
   }
+  if (!cfg.connectors.cursor && env.CURSOR_API_KEY) {
+    cfg.connectors.cursor = { apiKey: env.CURSOR_API_KEY, apiUrl: env.CURSOR_API_URL ?? "https://api.cursor.com" };
+  }
   // Secrets can stay out of the config file: fill them from env when the file omits them.
   if (cfg.auth.oidc && !cfg.auth.oidc.clientSecret) cfg.auth.oidc.clientSecret = env.OIDC_CLIENT_SECRET ?? "";
   if (cfg.connectors.claude && !cfg.connectors.claude.apiKey) cfg.connectors.claude.apiKey = env.CLAUDE_ADMIN_KEY ?? "";
   if (cfg.connectors.copilot && !cfg.connectors.copilot.token) cfg.connectors.copilot.token = env.GITHUB_TOKEN ?? "";
+  if (cfg.connectors.cursor) {
+    cfg.connectors.cursor.apiKey ||= env.CURSOR_API_KEY ?? "";
+    cfg.connectors.cursor.apiUrl ??= "https://api.cursor.com";
+  }
+  // A connector without its secret would fail every sync; leave it out and say why.
+  for (const [name, secret] of [
+    ["claude", cfg.connectors.claude?.apiKey],
+    ["copilot", cfg.connectors.copilot?.token],
+    ["cursor", cfg.connectors.cursor?.apiKey],
+  ] as const) {
+    if (cfg.connectors[name] && !secret) {
+      console.warn(`Connector "${name}" is configured but has no credential; it is disabled.`);
+      delete cfg.connectors[name];
+    }
+  }
   if (cfg.connectors.copilot) {
     cfg.connectors.copilot.apiUrl ??= "https://api.github.com";
     cfg.connectors.copilot.seatPriceUsd ??= { business: 19, enterprise: 39 };

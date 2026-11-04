@@ -86,7 +86,7 @@ test("validation errors come back as 400s with a message", async () => {
 test("manually imported spend (a tool with no connector) shrinks the Claude cap", async () => {
   const sub = getUserByEmail(h.db, "dev@acme.io")!.oidc_sub!;
   const res = await admin(h.url, "POST", "/api/admin/spend-import", {
-    tool: "cursor",
+    tool: "codex",
     rows: [
       { email: "dev@acme.io", usd: 40 },
       { email: "nobody@acme.io", usd: 5 },
@@ -106,7 +106,7 @@ test("chargeback CSV has one column per tool and neutralizes formula injection",
   assert.equal(res.status, 200);
   const csv = await res.text();
   const [head, ...rows] = csv.trim().split("\n");
-  assert.equal(head, "email,name,team,cost_center,cursor_usd,total_usd,limit_usd");
+  assert.equal(head, "email,name,team,cost_center,codex_usd,total_usd,limit_usd");
   assert.ok(rows.some((r) => r.startsWith("dev@acme.io,,platform,CC-100,40.00,40.00,250.00")), csv);
   assert.ok(rows.some((r) => r.includes(`"'=HYPERLINK(""http://x"")"`)), csv);
 });

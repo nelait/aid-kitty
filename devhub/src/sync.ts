@@ -1,6 +1,7 @@
 import type { Config } from "./config.js";
 import { ClaudeConnector } from "./connectors/claude.js";
 import { CopilotConnector } from "./connectors/copilot.js";
+import { CursorConnector } from "./connectors/cursor.js";
 import type { Connector } from "./connectors/types.js";
 import { audit, nowIso, tx, type Db, type User } from "./db.js";
 import { currentPeriod, walletFor } from "./wallet.js";
@@ -26,6 +27,7 @@ export class SyncService {
       this.connectors.push(this.claude);
     }
     if (cfg.connectors.copilot) this.connectors.push(new CopilotConnector(cfg.connectors.copilot));
+    if (cfg.connectors.cursor) this.connectors.push(new CursorConnector(cfg.connectors.cursor));
     this.connectors.push(...extra);
   }
 
@@ -70,17 +72,18 @@ export class SyncService {
   private storeSpend(c: Connector, rows: { externalId: string; cents: number }[]) {
     const period = currentPeriod();
     const users = this.db.prepare("SELECT * FROM users").all() as unknown as User[];
+    const norm = (id: string) => (c.normalizeId ? c.normalizeId(id) : id);
     const byExternal = new Map<string, User>();
     for (const u of users) {
       const id = c.externalIdFor(u);
-      if (id) byExternal.set(c.tool === "copilot" ? id.toLowerCase() : id, u);
+      if (id) byExternal.set(norm(id), u);
     }
 
     // Aggregate first: a vendor may report several rows for one identity.
     const perUser = new Map<number, number>();
     const unmatched = new Map<string, number>();
     for (const r of rows) {
-      const u = byExternal.get(c.tool === "copilot" ? r.externalId.toLowerCase() : r.externalId);
+      const u = byExternal.get(norm(r.externalId));
       if (u) perUser.set(u.id, (perUser.get(u.id) ?? 0) + r.cents);
       else unmatched.set(r.externalId, (unmatched.get(r.externalId) ?? 0) + r.cents);
     }

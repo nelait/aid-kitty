@@ -13,6 +13,8 @@ export interface Connector {
   fetchMonthlySpend(): Promise<SpendRow[]>;
   /** The user's identity in this vendor's system, if known. */
   externalIdFor(user: User): string | null;
+  /** Canonical form used to match identities, e.g. lowercase for logins and emails. */
+  normalizeId?(id: string): string;
 }
 
 export interface CapEnforcer {

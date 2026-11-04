@@ -70,10 +70,25 @@ export class MockClaude {
 /** In-memory stand-in for GitHub's Copilot seats API. */
 export class MockGitHub {
   seats: { login: string; plan: string }[] = [];
+  /** login -> premium request usage items for the current month */
+  premium = new Map<string, { product: string; netAmount: number }[]>();
+  premiumCalls = 0;
   url = "";
   private server = createServer((req, res) => {
     const u = new URL(req.url!, "http://x");
     if (req.headers.authorization !== "Bearer gh-token") return void res.writeHead(401).end("{}");
+    if (u.pathname === "/organizations/acme/settings/billing/premium_request/usage") {
+      this.premiumCalls++;
+      const user = (u.searchParams.get("user") ?? "").toLowerCase();
+      const items = (this.premium.get(user) ?? []).map((i) => ({
+        sku: "Copilot Premium Request", model: "GPT-5", unitType: "requests", pricePerUnit: 0.04,
+        grossQuantity: 0, grossAmount: i.netAmount, discountQuantity: 0, discountAmount: 0, netQuantity: 0, ...i,
+      }));
+      res.writeHead(200, { "content-type": "application/json" }).end(
+        JSON.stringify({ timePeriod: { year: 2026, month: 11 }, organization: "acme", user, usageItems: items }),
+      );
+      return;
+    }
     const m = u.pathname.match(/^\/orgs\/([^/]+)\/copilot\/billing\/seats$/);
     if (!m) return void res.writeHead(404).end("{}");
     const per = Number(u.searchParams.get("per_page"));
@@ -95,6 +110,36 @@ export class MockGitHub {
   }
 }
 
+/** In-memory stand-in for the Cursor Admin API's team spend endpoint. */
+export class MockCursor {
+  members: { email: string; spendCents: number }[] = [];
+  pageSize = 2;
+  url = "";
+  private server = createServer(async (req, res) => {
+    if (req.headers.authorization !== "Basic " + Buffer.from("cursor-key:").toString("base64")) {
+      return void res.writeHead(401).end("{}");
+    }
+    if (req.method !== "POST" || req.url !== "/teams/spend") return void res.writeHead(404).end("{}");
+    const { page } = JSON.parse(await readBody(req));
+    const slice = this.members.slice((page - 1) * this.pageSize, page * this.pageSize);
+    res.writeHead(200, { "content-type": "application/json" }).end(
+      JSON.stringify({
+        teamMemberSpend: slice.map((m) => ({ ...m, name: m.email, role: "member", fastPremiumRequests: 0 })),
+        subscriptionCycleStart: Date.now(),
+        totalMembers: this.members.length,
+        totalPages: Math.max(1, Math.ceil(this.members.length / this.pageSize)),
+      }),
+    );
+  });
+  async start() {
+    this.url = await listen(this.server);
+    return this;
+  }
+  close() {
+    this.server.close();
+  }
+}
+
 export interface Harness {
   db: Db;
   cfg: Config;
@@ -102,12 +147,14 @@ export interface Harness {
   url: string;
   claude: MockClaude;
   github: MockGitHub;
+  cursor: MockCursor;
   close(): void;
 }
 
 export async function harness(over: Partial<Config> = {}): Promise<Harness> {
   const claude = await new MockClaude().start();
   const github = await new MockGitHub().start();
+  const cursor = await new MockCursor().start();
   const cfg = loadConfig({
     databasePath: ":memory:",
     adminToken: "test-admin-token",
@@ -116,6 +163,7 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     connectors: {
       claude: { mode: "gateway", baseUrl: claude.url, apiKey: claude.key, enforceCaps: true },
       copilot: { org: "acme", token: "gh-token", apiUrl: github.url, seatPriceUsd: { business: 19, enterprise: 39 } },
+      cursor: { apiKey: "cursor-key", apiUrl: cursor.url },
     },
     ...over,
   });
@@ -131,8 +179,10 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     url,
     claude,
     github,
+    cursor,
     close() {
       server.close();
+      cursor.close();
       claude.close();
       github.close();
       db.close();
