@@ -47,7 +47,7 @@ Price the GCP metric per person-hour: for $X per person per month, use about X /
 3. Set up a staging registry (gcr.io or Artifact Registry) in a project linked to the Producer Portal.
 
 **Each release**
-1. Build and push the app, the metering agent and the deployer (from `devhub/`, with docker, yq v4, crane and credentials for the staging registry):
+1. Build and push the app, the metering agent and the deployer (from `devhub/`, with docker, yq v4, crane and credentials for the staging registry). Google's tools images (`gcr.io/cloud-marketplace-tools/...`, the deployer base and ubbagent) don't allow anonymous pulls, so sign in first with an account in the Producer Portal (`gcloud auth configure-docker gcr.io`):
    ```sh
    REGISTRY=gcr.io/<your-project> SERVICE_NAME=<service name> PARTNER_ID=<partner ID> \
    PARTNER_NAME="Your Company" VERSION=0.1.0 ./marketplace/gcp/build.sh --push
@@ -70,3 +70,4 @@ Expect to adjust details during each marketplace's review. These are worth check
 - that `deployer_helm/onbuild` accepts this chart layout;
 - that the ubbagent image runs as the pod's non-root user (1000);
 - which deployer tag the Producer Portal wants for the version.
+- the current address of Google's deployer base and ubbagent images. They returned 403 to anonymous pulls, so they may have moved to Artifact Registry; update `gcp/Dockerfile` and `gcpMarketplace.ubbagentImage` if so.

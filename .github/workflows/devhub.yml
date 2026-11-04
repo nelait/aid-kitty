@@ -104,10 +104,29 @@ jobs:
             echo "expected the chart to refuse both marketplaces at once" >&2
             exit 1
           fi
-      - name: Google Cloud Marketplace deployer image builds
+      # Google's deployer base image needs gcloud credentials to pull, so CI checks the inputs
+      # build.sh feeds it instead: every schema property is a value the chart actually has.
+      - name: Google Cloud Marketplace schema matches the chart
         run: |
-          mkdir -p marketplace/gcp/chart && cp -r charts/devhub marketplace/gcp/chart/devhub
-          docker build -q -t devhub-deployer:ci marketplace/gcp > /dev/null
+          python3 - <<'PY'
+          import yaml
+          schema = yaml.safe_load(open("marketplace/gcp/schema.yaml"))
+          values = yaml.safe_load(open("charts/devhub/values.yaml"))
+          def has(path):
+              node = values
+              for part in path.split("."):
+                  if not isinstance(node, dict) or part not in node:
+                      return False
+                  node = node[part]
+              return True
+          props = [p for p in schema["properties"] if p not in ("name", "namespace")]
+          for img in schema["x-google-marketplace"]["images"].values():
+              props += list(img["properties"])
+          missing = [p for p in props if not has(p)]
+          assert not missing, f"schema properties with no chart value: {missing}"
+          assert all(r in schema["properties"] for r in schema["required"]), "required lists an unknown property"
+          print(f"{len(props)} schema properties map to chart values")
+          PY
 
   terraform:
     runs-on: ubuntu-24.04
