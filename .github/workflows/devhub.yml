@@ -134,7 +134,8 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Smoke-test the image
         run: |
-          docker build -q -t devhub:ci devhub > /dev/null
+          # run steps start in devhub/ (see defaults), so the build context is "."
+          docker build -q -t devhub:ci . > /dev/null
           docker run -d --name devhub -p 8787:8787 -e DEVHUB_ADMIN_TOKEN=ci devhub:ci
           for i in $(seq 1 30); do
             curl -fsS localhost:8787/healthz && exit 0
