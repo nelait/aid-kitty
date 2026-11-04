@@ -77,6 +77,10 @@ export interface Config {
     cursor?: CursorConnectorConfig;
   };
   syncIntervalSeconds: number;
+  /** How often to recount merged PRs for the return-on-spend report (default 6). */
+  outputRefreshHours?: number;
+  /** Pause between GitHub search calls; search allows about 30 a minute (default 2100). */
+  githubSearchIntervalMs?: number;
   notify: {
     slackWebhookUrl?: string;
     /** smtp://user:pass@host:587 or smtps://user:pass@host:465. Without it, emails are only logged. */

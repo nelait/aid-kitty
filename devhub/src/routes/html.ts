@@ -57,7 +57,8 @@ export const flash = (req: Request) => {
   return m ? `<div class="flash">${esc(m)}</div>` : "";
 };
 
-export const back = (res: Response, path: string, msg: string) => res.redirect(`${path}?msg=${encodeURIComponent(msg)}`);
+export const back = (res: Response, path: string, msg: string) =>
+  res.redirect(`${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(msg)}`);
 
 export const csrfField = (p: Principal) => `<input type="hidden" name="_csrf" value="${esc(p.csrf)}">`;
 
@@ -65,6 +66,7 @@ const ADMIN_TABS: [string, string][] = [
   ["/admin", "Overview"],
   ["/admin/people", "People"],
   ["/admin/teams", "Teams"],
+  ["/admin/roi", "Return on spend"],
   ["/admin/unmatched", "Unmatched spend"],
   ["/admin/policy", "Policy"],
   ["/admin/license", "License"],

@@ -153,6 +153,14 @@ CREATE TABLE IF NOT EXISTS budget_alerts (
   sent_at TEXT NOT NULL,
   PRIMARY KEY (user_id, period, level)
 );
+CREATE TABLE IF NOT EXISTS output_metrics (
+  period TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value INTEGER NOT NULL,
+  synced_at TEXT NOT NULL,
+  PRIMARY KEY (period, subject, metric)
+);
 CREATE TABLE IF NOT EXISTS policies (
   scope TEXT PRIMARY KEY,
   doc TEXT NOT NULL,

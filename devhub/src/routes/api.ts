@@ -12,6 +12,7 @@ import {
   spendReport,
 } from "../service.js";
 import { licenseStatus } from "../license.js";
+import { roiCsv, roiReport } from "../roi.js";
 import { timingSafeEqual } from "node:crypto";
 import {
   applyCopilotExclusions,
@@ -209,6 +210,33 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
       const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
       await installLicense(db, text, req.principal!.label);
       res.json(await licenseStatus(db, cfg));
+    }),
+  );
+
+  // ---- Return on spend ----
+  r.get(
+    "/admin/roi",
+    requireAdmin,
+    wrap(async (req, res) => {
+      const period = String(req.query.period ?? currentPeriod());
+      if (!PERIOD_RE.test(period)) throw new HttpError(400, "period must be YYYY-MM");
+      const report = await roiReport(db, period);
+      if (req.query.format === "csv") {
+        res.setHeader("content-type", "text/csv; charset=utf-8");
+        res.setHeader("content-disposition", `attachment; filename="devhub-return-on-spend-${period}.csv"`);
+        return res.send(roiCsv(report));
+      }
+      res.json({ ...report, refreshed: await sync.output.lastRefresh(period) });
+    }),
+  );
+  r.post(
+    "/admin/roi/refresh",
+    requireAdmin,
+    wrap(async (req, res) => {
+      const period = String(req.body?.period ?? currentPeriod());
+      if (!PERIOD_RE.test(period)) throw new HttpError(400, "period must be YYYY-MM");
+      if (!sync.output.enabled) throw new HttpError(400, "GitHub isn't configured (set GITHUB_ORG and GITHUB_TOKEN)");
+      res.json(await sync.output.refresh(period));
     }),
   );
 

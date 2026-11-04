@@ -96,11 +96,30 @@ export class MockGitHub {
   premium = new Map<string, { product: string; netAmount: number }[]>();
   premiumCalls = 0;
   exclusions: Record<string, unknown> = {};
+  /** login -> merged PRs that month (search total_count) */
+  mergedPrs = new Map<string, number>();
+  orgMerged = 0;
+  claudeMarked = 0;
+  searches: string[] = [];
+  /** Answer 403 (rate limited) once this many searches have been made. */
+  rateLimitAfter: number | null = null;
   exclusionPuts = 0;
   url = "";
   private server = createServer((req, res) => {
     const u = new URL(req.url!, "http://x");
     if (req.headers.authorization !== "Bearer gh-token") return void res.writeHead(401).end("{}");
+    if (u.pathname === "/search/issues") {
+      const q = u.searchParams.get("q") ?? "";
+      this.searches.push(q);
+      if (this.rateLimitAfter !== null && this.searches.length > this.rateLimitAfter) {
+        res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ message: "API rate limit exceeded" }));
+        return;
+      }
+      const author = q.match(/author:(\S+)/)?.[1];
+      const total = author ? (this.mergedPrs.get(author) ?? 0) : q.includes("Generated with Claude Code") ? this.claudeMarked : this.orgMerged;
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ total_count: total, incomplete_results: false, items: [] }));
+      return;
+    }
     if (u.pathname === "/orgs/acme/copilot/content_exclusion") {
       if (req.method === "GET") {
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(this.exclusions));
@@ -235,6 +254,7 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     adminToken: "test-admin-token",
     auth: { devLogin: true, jitProvisioning: true, allowedEmailDomains: [] },
     license: { text: testLicense(1000) },
+    githubSearchIntervalMs: 0,
     wallet: { defaultMonthlyBudgetUsd: 100, warnAt: 0.8 },
     connectors: {
       claude: { mode: "gateway", baseUrl: claude.url, apiKey: claude.key, enforceCaps: true },

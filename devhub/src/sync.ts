@@ -6,6 +6,7 @@ import type { Connector } from "./connectors/types.js";
 import { randomUUID } from "node:crypto";
 import { BudgetAlerts } from "./alerts.js";
 import { emailSender, type EmailSender } from "./notify.js";
+import { OutputService } from "./output.js";
 import { audit, nowIso, type Db, type User } from "./db.js";
 import { currentPeriod, walletFor } from "./wallet.js";
 
@@ -20,6 +21,7 @@ export class SyncService {
   readonly claude?: ClaudeConnector;
   private running: Promise<SyncResult[]> | null = null;
   readonly alerts: BudgetAlerts;
+  readonly output: OutputService;
 
   constructor(
     private db: Db,
@@ -28,6 +30,7 @@ export class SyncService {
     email: EmailSender = emailSender(cfg),
   ) {
     this.alerts = new BudgetAlerts(db, cfg, email);
+    this.output = new OutputService(db, cfg);
     if (cfg.connectors.claude) {
       this.claude = new ClaudeConnector(cfg.connectors.claude);
       this.connectors.push(this.claude);
@@ -185,7 +188,12 @@ export class SyncService {
   start(): () => void {
     const tick = () => {
       this.claimSyncLease()
-        .then((leader) => (leader ? this.run() : undefined))
+        .then(async (leader) => {
+          if (!leader) return;
+          await this.run();
+          // PR counts are slow (rate-limited search); run them after, without holding up the next sync.
+          this.output.refreshIfDue().catch((e) => console.error("output refresh failed", e));
+        })
         .catch((e) => console.error("sync failed", e));
     };
     tick();

@@ -25,6 +25,22 @@ Dev Hub doesn't rebuild any of that. It sits above the gateway and adds what the
 
 The same connector also works with the **Claude Enterprise Admin API** (`mode: "enterprise"`), which serves the same spend-limits API at `api.anthropic.com`.
 
+## Return on spend
+
+**Admin → Return on spend** puts AI spend (every tool) next to merged pull requests, per team and per month:
+
+- **Org:** spend, merged PRs by people in Dev Hub (and the whole GitHub org's total), spend per merged PR, and PRs whose description says "Generated with Claude Code". That last count is a lower bound, because the marker can be turned off.
+- **By team:** spend, PRs, spend per PR, and each team's share of spend against its share of PRs.
+- **Last 6 months:** the same figures as a trend.
+- **By person:** collapsed by default, with a warning not to use it as a leaderboard.
+- **CSV:** `GET /api/admin/roi?period=YYYY-MM&format=csv`.
+
+PRs are counted with GitHub's search API (`org:<org> is:pull-request is:merged author:<login> merged:<month>`) using the `GITHUB_ORG` and `GITHUB_TOKEN` connector credentials. Search allows about 30 calls a minute, so Dev Hub spaces its calls about 2 seconds apart (`githubSearchIntervalMs`). It refreshes the current month every 6 hours (`outputRefreshHours`) and last month once more after it ends. If it hits a rate limit, it keeps what it counted, marks the month incomplete and finishes on the next run. Admins can also recount from the page.
+
+Only people with a GitHub login in Dev Hub have their PRs counted. Spend from people without one is shown but left out of every per-PR figure, so it can't inflate them, and the page asks admins to add the missing logins.
+
+PR counts are a rough signal of output, not a productivity measure: PRs differ in size and difficulty, and spend isn't the only thing that changes output. The page says so, and leads with team and org views.
+
 ## One policy for every tool
 
 Admins write one AI usage policy under **Admin → Policy**, and Dev Hub translates it for each tool:
@@ -88,7 +104,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 73 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 80 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
@@ -284,13 +300,13 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
 | **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
+| **Done (Phase 1k)** | Return on spend: spend vs merged PRs by team and month, 6-month trend, Claude Code-marked PRs, CSV | Shows what the AI budget buys |
 | **Done (Phase 1j)** | One policy for every tool: Claude Code (live helper, static file, gateway block), Copilot content exclusions; team rules only tighten | Security teams set rules once |
 | **Done (Phase 1i)** | Keyless-signed images, SPDX SBOM attestation, SLSA provenance, deploy by digest | Customers can verify what they run |
 | **Done (Phase 1h)** | Budget alerts by email at 80% and 100%; managers told when someone runs out | People hear before they're blocked |
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |
-| P2 | Spend → output reporting (join spend with GitHub PRs and commits) | ROI view for finance |
 | Phase 2 | Workspaces in the customer's AWS/GCP (Coder as a backend, or a built-in EC2/GCE template) | |
 | Phase 3 | Per-PR preview environments with TTL | |
 
