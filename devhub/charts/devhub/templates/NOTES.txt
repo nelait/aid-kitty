@@ -1,0 +1,27 @@
+Dev Hub is deploying as {{ include "devhub.fullname" . }} in {{ .Release.Namespace }}.
+
+Portal: {{ .Values.config.publicUrl }}
+SCIM base URL for Okta: {{ .Values.config.publicUrl }}/scim/v2
+OIDC redirect URI: {{ .Values.config.publicUrl }}/auth/callback
+
+{{- if not (or .Values.secrets.existingSecret .Values.secrets.values) }}
+
+WARNING: no secrets configured. Set secrets.existingSecret (or secrets.values) with at least
+OIDC_CLIENT_SECRET and DEVHUB_ADMIN_TOKEN, plus the connector credentials you use.
+{{- end }}
+{{- if eq .Values.database.type "postgres" }}
+
+Database: Postgres from DATABASE_URL in the Secret, {{ .Values.replicaCount }} replica(s).
+{{- else }}
+
+Database: SQLite on a persistent volume (one replica). Back up the volume.
+{{- end }}
+{{- if .Values.config.auth.devLogin }}
+
+WARNING: config.auth.devLogin is true. Anyone can sign in as any email. Turn it off.
+{{- end }}
+
+Install a license:
+  curl -X PUT {{ .Values.config.publicUrl }}/api/admin/license \
+    -H "authorization: Bearer $DEVHUB_ADMIN_TOKEN" -H "content-type: application/json" \
+    -d "{\"license_file\": $(cat acme.license.json)}"

@@ -1,0 +1,37 @@
+{
+  "//": "Secrets come from env: OIDC_CLIENT_SECRET, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY, SMTP_URL, DEVHUB_ADMIN_TOKEN.",
+  "publicUrl": "https://devhub.acme.internal",
+  "databasePath": "/var/lib/devhub/devhub.db",
+  "claudeGatewayUrl": "https://claude-gateway.acme.internal",
+  "auth": {
+    "oidc": {
+      "issuer": "https://acme.okta.com/oauth2/default",
+      "clientId": "0oa...",
+      "adminGroup": "devhub-admins",
+      "groupsClaim": "groups"
+    },
+    "devLogin": false,
+    "jitProvisioning": true,
+    "allowedEmailDomains": ["acme.io"]
+  },
+  "wallet": { "defaultMonthlyBudgetUsd": 300, "warnAt": 0.8 },
+  "connectors": {
+    "claude": {
+      "mode": "gateway",
+      "baseUrl": "https://claude-gateway.acme.internal",
+      "enforceCaps": true
+    },
+    "copilot": {
+      "org": "acme",
+      "apiUrl": "https://api.github.com",
+      "seatPriceUsd": { "business": 19, "enterprise": 39 },
+      "premiumRequests": true,
+      "premiumRefreshMinutes": 60
+    },
+    "cursor": {
+      "apiUrl": "https://api.cursor.com"
+    }
+  },
+  "notify": { "emailFrom": "Dev Hub <devhub@acme.io>", "budgetAlerts": true },
+  "syncIntervalSeconds": 300
+}

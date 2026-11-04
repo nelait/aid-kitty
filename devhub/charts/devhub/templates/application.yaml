@@ -1,0 +1,31 @@
+{{- if .Values.gcpMarketplace.enabled }}
+# Google Cloud Marketplace shows the deployment as one application in the console.
+apiVersion: app.k8s.io/v1beta1
+kind: Application
+metadata:
+  name: {{ .Release.Name }}
+  labels: {{- include "devhub.labels" . | nindent 4 }}
+  annotations:
+    marketplace.cloud.google.com/deploy-info: {{ dict "partner_id" .Values.gcpMarketplace.partnerId "product_id" .Values.gcpMarketplace.productId "partner_name" .Values.gcpMarketplace.partnerName | toJson | quote }}
+spec:
+  descriptor:
+    type: Dev Hub
+    version: {{ .Chart.AppVersion | quote }}
+    description: One AI budget, policy and cloud workspaces across Claude, GitHub Copilot and Cursor.
+    links:
+      - description: Admin guide
+        url: https://github.com/nelait/aid-kitty/tree/main/devhub#readme
+    notes: |-
+      Open {{ .Values.config.publicUrl }} and sign in with your identity provider. Admins manage people, budgets and policy under Admin.
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  addOwnerRef: true
+  componentKinds:
+    - { group: apps/v1, kind: Deployment }
+    - { group: v1, kind: Service }
+    - { group: v1, kind: ConfigMap }
+    - { group: v1, kind: Secret }
+    - { group: v1, kind: PersistentVolumeClaim }
+    - { group: networking.k8s.io/v1, kind: Ingress }
+{{- end }}
