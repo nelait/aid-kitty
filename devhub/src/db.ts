@@ -10,6 +10,7 @@ export interface Team {
   monthly_pool_cents: number | null;
   /** Default per-member monthly budget; null = org default. */
   member_default_cents: number | null;
+  scim_external_id: string | null;
 }
 
 export interface User {
@@ -24,6 +25,9 @@ export interface User {
   github_login: string | null;
   monthly_budget_cents: number | null;
   created_at: string;
+  scim_external_id: string | null;
+  /** Set when the IdP deletes the user over SCIM; the row stays for spend history. */
+  deleted_at: string | null;
 }
 
 export interface RaiseRequest {
@@ -125,7 +129,20 @@ export function openDb(path: string): Db {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Additive migrations for databases created by earlier versions. */
+function migrate(db: Db): void {
+  const addColumn = (table: string, column: string, type: string) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  };
+  // SCIM provisioning (Okta): the IdP's own ID for the user/group, and soft deletion.
+  addColumn("users", "scim_external_id", "TEXT");
+  addColumn("users", "deleted_at", "TEXT");
+  addColumn("teams", "scim_external_id", "TEXT");
 }
 
 export function tx<T>(db: Db, fn: () => T): T {

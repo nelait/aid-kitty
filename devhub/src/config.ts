@@ -47,6 +47,8 @@ export interface Config {
   databasePath: string;
   /** Bearer token for automation (Terraform, scripts). Acts as an admin. */
   adminToken?: string;
+  /** Bearer token the IdP uses for SCIM provisioning at /scim/v2. SCIM is off when unset. */
+  scimToken?: string;
   auth: {
     oidc?: OidcConfig;
     /** Email-only login for local development. Never enable in production. */
@@ -90,6 +92,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     publicUrl: env.DEVHUB_PUBLIC_URL ?? "http://localhost:8787",
     databasePath: env.DEVHUB_DB ?? "devhub.db",
     adminToken: env.DEVHUB_ADMIN_TOKEN,
+    scimToken: env.DEVHUB_SCIM_TOKEN,
     auth: {
       devLogin: env.DEVHUB_DEV_LOGIN === "true",
       jitProvisioning: true,

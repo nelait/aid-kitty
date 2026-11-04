@@ -199,6 +199,8 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
       throw e;
     }
     if (status === "disabled") db.prepare("DELETE FROM web_sessions WHERE user_id = ?").run(u.id);
+    // Re-activating someone the IdP deleted brings them back into SCIM as well.
+    if (status === "active") db.prepare("UPDATE users SET deleted_at = NULL WHERE id = ?").run(u.id);
     audit(db, actor, "user.saved", { email, ...Object.fromEntries(sets) });
     return getUser(db, u.id)!;
   };
