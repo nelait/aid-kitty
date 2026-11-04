@@ -53,7 +53,9 @@ secrets:
   # Recognized keys:
   #   DATABASE_URL (with database.type=postgres), OIDC_CLIENT_SECRET, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY,
   #   DEVHUB_ADMIN_TOKEN, DEVHUB_SCIM_TOKEN, DEVHUB_SLACK_WEBHOOK_URL, DEVHUB_LICENSE,
-  #   SMTP_URL (budget alert emails), DEVHUB_EMAIL_FROM, DEVHUB_POLICY_TOKEN (policy helper)
+  #   SMTP_URL (budget alert emails), DEVHUB_EMAIL_FROM, DEVHUB_POLICY_TOKEN (policy helper),
+  #   CODER_SESSION_TOKEN (Coder workspaces)
+  # Workspace backends go under config.workspaces: { aws: { region }, gcp: { project }, coder: { url } }.
 
 service:
   type: ClusterIP

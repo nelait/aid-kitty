@@ -248,7 +248,7 @@ export interface Harness {
 
 export async function harness(
   over: Partial<Config> = {},
-  opts: { workspaceProvider?: WorkspaceProvider | null; now?: () => number } = {},
+  opts: { workspaceProviders?: WorkspaceProvider[]; now?: () => number } = {},
 ): Promise<Harness> {
   const claude = await new MockClaude().start();
   const github = await new MockGitHub().start();
@@ -279,7 +279,7 @@ export async function harness(
         emails.push(e);
       },
     },
-    { workspaceProvider: opts.workspaceProvider ?? null, now: opts.now },
+    { workspaceProviders: opts.workspaceProviders ?? [], now: opts.now },
   );
   const server = createServer(createApp(db, cfg, sync));
   const url = await listen(server);
@@ -361,7 +361,11 @@ export function admin(base: string, method: string, path: string, body?: unknown
 
 /** An in-memory cloud for workspace tests. Tests move machines between states by hand. */
 export class FakeCloud implements WorkspaceProvider {
-  kind = "fake";
+  /** Stands in for a real backend kind ("aws", "gcp", "coder"), so templates of that kind route here. */
+  constructor(
+    public kind = "aws",
+    public usesSetupScript = true,
+  ) {}
   machines = new Map<string, { state: MachineState; spec: MachineSpec; template: Record<string, unknown> }>();
   calls: string[] = [];
   failCreate: string | null = null;

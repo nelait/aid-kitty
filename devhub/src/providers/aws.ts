@@ -8,28 +8,9 @@ import {
   type _InstanceType,
 } from "@aws-sdk/client-ec2";
 import { HttpError } from "../service.js";
+import type { MachineSpec, MachineState, WorkspaceProvider } from "./types.js";
 
-/** Normalised workspace machine states, whatever the provider. */
-export type MachineState = "starting" | "running" | "stopping" | "stopped" | "terminated";
-
-export interface MachineSpec {
-  workspaceId: number;
-  name: string;
-  ownerEmail: string;
-  userData: string;
-}
-
-export interface WorkspaceProvider {
-  kind: string;
-  create(template: Record<string, unknown>, spec: MachineSpec): Promise<string>;
-  start(machineId: string): Promise<void>;
-  stop(machineId: string): Promise<void>;
-  destroy(machineId: string): Promise<void>;
-  /** Current state of each machine; missing ids are gone (treated as terminated). */
-  describe(machineIds: string[]): Promise<Map<string, MachineState>>;
-  /** How a developer reaches the machine, e.g. an SSH config block. */
-  connectHint(machineId: string, workspaceName: string): string;
-}
+export type { MachineSpec, MachineState, WorkspaceProvider } from "./types.js";
 
 export interface AwsTemplate {
   imageId: string;
@@ -90,6 +71,7 @@ const STATE: Record<string, MachineState> = {
  */
 export class AwsProvider implements WorkspaceProvider {
   kind = "aws";
+  usesSetupScript = true;
 
   constructor(
     private region: string,

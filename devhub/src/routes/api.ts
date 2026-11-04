@@ -225,7 +225,7 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
   };
   const withHint = (w: Awaited<ReturnType<typeof ws.get>>) => ({
     ...w,
-    connect: w.machine_id && ws.provider ? ws.provider.connectHint(w.machine_id, w.name) : null,
+    connect: ws.hintFor(w),
   });
 
   r.get(

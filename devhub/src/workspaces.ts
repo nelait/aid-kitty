@@ -2,7 +2,7 @@ import type { Config } from "./config.js";
 import type { Connector, SpendRow } from "./connectors/types.js";
 import { audit, insertId, isUniqueViolation, type Db, type Queryable, type User } from "./db.js";
 import { helperScript } from "./policy.js";
-import { AwsProvider, validateAwsTemplate, type MachineState, type WorkspaceProvider } from "./providers/aws.js";
+import { buildProviders, PROVIDER_LABELS, validateTemplateConfig, type MachineState, type WorkspaceProvider } from "./providers/index.js";
 import { HttpError } from "./service.js";
 import { walletFor } from "./wallet.js";
 
@@ -57,6 +57,8 @@ export function userData(cfg: Config, user: User, sshKey: string): string {
   return `#!/bin/bash
 # Dev Hub workspace setup for ${user.email}. Expects an Ubuntu or Debian image with the SSM agent.
 set -euo pipefail
+# GCP runs startup scripts on every boot; only set up once.
+[ -f /var/lib/devhub/setup-done ] && exit 0
 id -u dev >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo dev
 echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-dev && chmod 440 /etc/sudoers.d/90-dev
 install -d -m 700 -o dev -g dev /home/dev/.ssh
@@ -85,6 +87,7 @@ if ! command -v node >/dev/null || ! node -v | grep -q '^v22'; then
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
 fi
 npm install -g @anthropic-ai/claude-code
+install -d /var/lib/devhub && touch /var/lib/devhub/setup-done
 `;
 }
 
@@ -96,19 +99,26 @@ export function periodBounds(period: string): [number, number] {
 }
 
 export class WorkspaceService {
-  readonly provider: WorkspaceProvider | null;
+  /** Configured backends by kind ("aws", "gcp", "coder"). Templates pick one. */
+  readonly providers: Map<string, WorkspaceProvider>;
 
   constructor(
     private db: Db,
     private cfg: Config,
-    provider?: WorkspaceProvider | null,
+    providers?: WorkspaceProvider[],
     private now: () => number = Date.now,
   ) {
-    this.provider = provider !== undefined ? provider : cfg.workspaces?.aws ? new AwsProvider(cfg.workspaces.aws.region) : null;
+    this.providers = new Map((providers ?? buildProviders(cfg)).map((p) => [p.kind, p]));
   }
 
   get enabled() {
-    return this.provider !== null;
+    return this.providers.size > 0;
+  }
+
+  /** The SSH config block (or CLI steps) for reaching a workspace, if its backend is configured. */
+  hintFor(w: Workspace): string | null {
+    const p = this.providers.get(w.provider);
+    return w.machine_id && p ? p.connectHint(w.machine_id, w.name) : null;
   }
 
   private iso(ms = this.now()) {
@@ -129,9 +139,10 @@ export class WorkspaceService {
     }
   }
 
-  private need(): WorkspaceProvider {
-    if (!this.provider) throw new HttpError(400, "Workspaces aren't set up (configure workspaces.aws.region)");
-    return this.provider;
+  private need(kind: string): WorkspaceProvider {
+    const p = this.providers.get(kind);
+    if (!p) throw new HttpError(400, `The ${PROVIDER_LABELS[kind] ?? kind} backend isn't configured on this Dev Hub.`);
+    return p;
   }
 
   // ------------------------------------------------------------------ templates
@@ -139,7 +150,11 @@ export class WorkspaceService {
   async saveTemplate(id: number | null, b: Record<string, unknown>, actor: string): Promise<WorkspaceTemplate> {
     const name = String(b.name ?? "").trim();
     if (!/^[\w .,()+/-]{2,60}$/.test(name)) throw new HttpError(400, "name must be 2-60 characters: letters, digits, spaces and . , ( ) + / -");
-    const config = validateAwsTemplate((b.config ?? {}) as Record<string, unknown>);
+    // With a single backend configured, templates default to it.
+    const kind = String(b.provider ?? (this.providers.size === 1 ? [...this.providers.keys()][0] : "")).trim();
+    if (!kind) throw new HttpError(400, `provider is required: one of ${[...this.providers.keys()].join(", ")}`);
+    this.need(kind);
+    const config = validateTemplateConfig(kind, (b.config ?? {}) as Record<string, unknown>);
     const hourly = Number(b.hourly_usd);
     const storage = Number(b.storage_gb_month_usd ?? 0.08);
     const stopAfter = Number(b.stop_after_hours ?? 8);
@@ -148,7 +163,7 @@ export class WorkspaceService {
     if (!Number.isInteger(stopAfter) || stopAfter < 1 || stopAfter > 24) throw new HttpError(400, "stop_after_hours must be a whole number from 1 to 24");
     const enabled = b.enabled === false || b.enabled === "0" ? 0 : 1;
     // Hourly prices keep 4 decimals (AWS lists e.g. $0.1664), so they're stored in 1/10,000 USD.
-    const values = [name, "aws", JSON.stringify(config), Math.round(hourly * 10_000), Math.round(storage * 100), stopAfter, enabled] as const;
+    const values = [name, kind, JSON.stringify(config), Math.round(hourly * 10_000), Math.round(storage * 100), stopAfter, enabled] as const;
     try {
       if (id === null) {
         id = await insertId(
@@ -170,7 +185,7 @@ export class WorkspaceService {
       }
       throw e;
     }
-    await audit(this.db, actor, "workspace.template.saved", { id, name, config, hourly_usd: hourly, stopAfter, enabled });
+    await audit(this.db, actor, "workspace.template.saved", { id, name, provider: kind, config, hourly_usd: hourly, stopAfter, enabled });
     return (await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ?", id))!;
   }
 
@@ -225,20 +240,21 @@ export class WorkspaceService {
   }
 
   async create(user: User, templateId: number, name: string): Promise<Workspace> {
-    const provider = this.need();
     name = name.trim().toLowerCase();
     if (!NAME_RE.test(name)) throw new HttpError(400, "Name: 3-32 lowercase letters, digits or dashes, starting with a letter");
-    const sshKey = await this.db.get<{ k: string | null }>("SELECT ssh_public_key AS k FROM users WHERE id = ?", user.id);
-    if (!sshKey?.k) throw new HttpError(400, "Add your SSH public key first, so you can connect to the workspace.");
     const t = await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ? AND enabled = 1", templateId);
     if (!t) throw new HttpError(400, "Choose an available template.");
+    const provider = this.need(t.provider);
+    // Dev Hub's setup script installs the developer's key; Coder templates handle access themselves.
+    const sshKey = await this.db.get<{ k: string | null }>("SELECT ssh_public_key AS k FROM users WHERE id = ?", user.id);
+    if (provider.usesSetupScript && !sshKey?.k) throw new HttpError(400, "Add your SSH public key first, so you can connect to the workspace.");
     const mine = await this.listFor(user.id);
     const max = this.cfg.workspaces?.maxPerUser ?? 3;
     if (mine.length >= max) throw new HttpError(409, `You can have up to ${max} workspaces. Delete one first.`);
     if (mine.some((w) => w.name === name)) throw new HttpError(409, `You already have a workspace named ${name}.`);
     await this.budgetCheck(user);
 
-    const disk = Number(JSON.parse(t.config).diskGb ?? 50);
+    const disk = Number(JSON.parse(t.config).diskGb ?? 0);
     const id = await insertId(
       this.db,
       "INSERT INTO workspaces (user_id, template_id, name, provider, state, disk_gb, hourly_usd_e4, storage_gb_month_cents, created_at) VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?)",
@@ -253,7 +269,8 @@ export class WorkspaceService {
     );
     let ws = await this.get(id);
     try {
-      const machineId = await provider.create(JSON.parse(t.config), { workspaceId: id, name, ownerEmail: user.email, userData: userData(this.cfg, user, sshKey.k) });
+      const setup = provider.usesSetupScript ? userData(this.cfg, user, sshKey!.k!) : "";
+      const machineId = await provider.create(JSON.parse(t.config), { workspaceId: id, name, ownerEmail: user.email, userData: setup });
       await this.db.tx(async (q) => {
         await this.setState(q, ws, "starting", { machine_id: machineId, stop_at: this.iso(this.now() + t.stop_after_hours * 3_600_000), detail: null });
         await this.openRun(q, ws);
@@ -272,7 +289,7 @@ export class WorkspaceService {
     if (ws.state !== "stopped") throw new HttpError(409, `The workspace is ${ws.state}; only a stopped workspace can be started.`);
     await this.budgetCheck(user);
     const t = await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ?", ws.template_id);
-    const provider = this.need();
+    const provider = this.need(ws.provider);
     await this.cloud("start the workspace", () => provider.start(ws.machine_id!));
     await this.db.tx(async (q) => {
       await this.setState(q, ws, "starting", { stop_at: this.iso(this.now() + (t?.stop_after_hours ?? 8) * 3_600_000) });
@@ -283,7 +300,7 @@ export class WorkspaceService {
 
   async stop(ws: Workspace, actor: string, reason = "workspace.stopped") {
     if (!["running", "starting"].includes(ws.state)) throw new HttpError(409, `The workspace is ${ws.state}; only a running workspace can be stopped.`);
-    const provider = this.need();
+    const provider = this.need(ws.provider);
     await this.cloud("stop the workspace", () => provider.stop(ws.machine_id!));
     await this.db.tx(async (q) => {
       await this.setState(q, ws, "stopping", { stop_at: null });
@@ -304,8 +321,10 @@ export class WorkspaceService {
 
   async destroy(ws: Workspace, actor: string) {
     if (ws.state === "terminated") return;
-    const provider = this.need();
-    if (ws.machine_id) await this.cloud("delete the workspace", () => provider.destroy(ws.machine_id!));
+    if (ws.machine_id) {
+      const provider = this.need(ws.provider);
+      await this.cloud("delete the workspace", () => provider.destroy(ws.machine_id!));
+    }
     await this.db.tx(async (q) => {
       await this.setState(q, ws, "terminated", { stop_at: null, terminated_at: this.iso() });
       await this.closeRun(q, ws);
@@ -318,13 +337,19 @@ export class WorkspaceService {
    * and stop workspaces that are past their stop time. Runs on every sync.
    */
   async reconcile(): Promise<{ checked: number; autoStopped: number }> {
-    if (!this.provider) return { checked: 0, autoStopped: 0 };
-    const live = await this.db.all<Workspace>("SELECT * FROM workspaces WHERE state NOT IN ('terminated', 'error', 'creating') AND machine_id IS NOT NULL");
+    const all = await this.db.all<Workspace>("SELECT * FROM workspaces WHERE state NOT IN ('terminated', 'error', 'creating') AND machine_id IS NOT NULL");
+    // A workspace whose backend is no longer configured can't be checked; leave it as it is
+    // rather than wrongly marking it deleted.
+    const live = all.filter((w) => this.providers.has(w.provider));
     if (!live.length) return { checked: 0, autoStopped: 0 };
-    const states = await this.provider.describe(live.map((w) => w.machine_id!));
+    const states = new Map<string, MachineState>();
+    for (const [kind, provider] of this.providers) {
+      const ids = live.filter((w) => w.provider === kind).map((w) => w.machine_id!);
+      if (ids.length) for (const [id, s] of await provider.describe(ids)) states.set(`${kind}:${id}`, s);
+    }
     let autoStopped = 0;
     for (const ws of live) {
-      const actual = states.get(ws.machine_id!) ?? "terminated";
+      const actual = states.get(`${ws.provider}:${ws.machine_id}`) ?? "terminated";
       await this.db.tx(async (q) => {
         if (actual !== ws.state) {
           await this.setState(q, ws, actual, actual === "terminated" ? { terminated_at: this.iso(), stop_at: null } : {});

@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { BudgetAlerts } from "./alerts.js";
 import { emailSender, type EmailSender } from "./notify.js";
 import { OutputService } from "./output.js";
-import type { WorkspaceProvider } from "./providers/aws.js";
+import type { WorkspaceProvider } from "./providers/types.js";
 import { WorkspacesConnector, WorkspaceService } from "./workspaces.js";
 import { audit, nowIso, type Db, type User } from "./db.js";
 import { currentPeriod, walletFor } from "./wallet.js";
@@ -31,9 +31,10 @@ export class SyncService {
     private cfg: Config,
     extra: Connector[] = [],
     email: EmailSender = emailSender(cfg),
-    opts: { workspaceProvider?: WorkspaceProvider | null; now?: () => number } = {},
+    /** workspaceProviders replaces the configured backends (tests pass fakes). */
+    opts: { workspaceProviders?: WorkspaceProvider[]; now?: () => number } = {},
   ) {
-    this.workspaces = new WorkspaceService(db, cfg, opts.workspaceProvider, opts.now);
+    this.workspaces = new WorkspaceService(db, cfg, opts.workspaceProviders, opts.now);
     if (this.workspaces.enabled) this.connectors.push(new WorkspacesConnector(this.workspaces));
     this.alerts = new BudgetAlerts(db, cfg, email);
     this.output = new OutputService(db, cfg);

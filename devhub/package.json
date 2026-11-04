@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.1161.0",
+    "@google-cloud/compute": "^7.9.0",
     "express": "^4.22.3",
     "jose": "^6.2.15",
     "nodemailer": "^10.3.1",

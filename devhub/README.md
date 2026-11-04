@@ -27,22 +27,28 @@ The same connector also works with the **Claude Enterprise Admin API** (`mode: "
 
 ## Cloud workspaces
 
-Developers create cloud development machines from **Workspaces** in the portal. They run in the customer's own AWS account, from templates admins define under **Admin → Workspaces**.
+Developers create cloud development machines from **Workspaces** in the portal, using templates admins define under **Admin → Workspaces**. A template runs on one of three backends; configure any combination:
+
+| Backend | Machines | Developers connect through | Dev Hub's credentials |
+| --- | --- | --- | --- |
+| **AWS EC2** | EC2 instance: no public IP, IMDSv2 required, encrypted gp3 disk | AWS Session Manager (SSH or VS Code Remote-SSH) | Default AWS chain: IRSA or EKS Pod Identity |
+| **Google Compute Engine** | Shielded VM: no external IP, startup script, `block-project-ssh-keys` | IAP TCP forwarding (SSH or VS Code Remote-SSH) | Application Default Credentials: GKE Workload Identity |
+| **Coder** | Whatever the Coder template provisions (any cloud, Kubernetes) | `coder config-ssh`, then SSH or VS Code | A Coder session token |
 
 **What a workspace is**
-- An EC2 instance with no public IP, IMDSv2 required, an encrypted gp3 disk, and tags `managed-by=devhub`, `devhub:owner=<email>` and `devhub:workspace-id`.
-- On first boot it creates a `dev` user with the developer's SSH key and installs git, Node.js 22 and Claude Code. It also installs Dev Hub's [policy helper](#one-policy-for-every-tool), so Claude Code on the workspace follows the organization's policy.
-- Developers connect with SSH or VS Code Remote-SSH through **AWS Session Manager**: no inbound ports, no bastion. The page shows the `~/.ssh/config` block to use.
+- **AWS and GCP:** on first boot, Dev Hub's setup script creates a `dev` user with the developer's SSH key and installs git, Node.js 22 and Claude Code. It also installs Dev Hub's [policy helper](#one-policy-for-every-tool), so Claude Code follows the organization's policy. The script runs once; GCP's startup scripts run on every boot, so it marks itself done. Machines are tagged or labelled `managed-by=devhub` with the owner and workspace ID. The page shows the `~/.ssh/config` block to use.
+- **Coder:** Coder's template provisions the machine, so developers don't need to give Dev Hub an SSH key. Dev Hub creates the workspace for the person's Coder account (matched by email), and drives start, stop and delete through Coder's API. To get the org's Claude Code policy there, add the policy helper to the Coder template (download it from **Admin → Policy**).
 
 **Lifecycle and cost**
 - Each template sets how long a workspace runs before Dev Hub **stops it automatically** (1–24 hours). A developer can add 2 hours at a time, up to 12 hours from now. A stopped workspace keeps its disk.
-- Running hours (at the template's price) plus disk storage (per GB-month, prorated) are charged to the developer's **budget wallet** as a `workspaces` tool, so compute counts against the same limit as AI spend. Nobody can create or start a workspace once their budget is used up.
-- Every sync reconciles with AWS: actual states are recorded and billing intervals opened or closed. A workspace deleted outside Dev Hub is marked deleted.
-- Deleting asks for confirmation and terminates the instance and its disk. Each person can have up to 3 workspaces (`workspaces.maxPerUser`).
+- Running hours (at the template's price, to 4 decimals) plus disk storage (per GB-month, prorated) are charged to the developer's **budget wallet** as a `workspaces` tool, so compute counts against the same limit as AI spend. For Coder templates, the price is your estimate of what one machine costs per hour.
+- Nobody can create or start a workspace once their budget is used up.
+- Every sync reconciles with each backend: actual states are recorded and billing intervals opened or closed. A workspace deleted outside Dev Hub is marked deleted. If a backend is removed from the config, its workspaces are left as they are, not marked deleted.
+- Deleting asks for confirmation and destroys the machine and its disk. Each person can have up to 3 workspaces (`workspaces.maxPerUser`). A template's backend can't change after it's created.
 
-**Setup**
+**Setup: AWS EC2**
 1. Set `workspaces.aws.region` in the config file (or `DEVHUB_WORKSPACES_AWS_REGION`).
-2. Give Dev Hub's pod an AWS role through IRSA or EKS Pod Identity (Helm: `serviceAccount.annotations`). Dev Hub uses the default AWS credential chain and never stores AWS keys. A starting point for its policy (review it with your AWS admin):
+2. Give Dev Hub's pod an AWS role through IRSA or EKS Pod Identity (Helm: `serviceAccount.annotations`). A starting point for its policy (review it with your AWS admin):
    ```json
    {
      "Version": "2012-10-17",
@@ -57,10 +63,24 @@ Developers create cloud development machines from **Workspaces** in the portal. 
    }
    ```
 3. Create the workspace instance profile (`devhub-workspace`) with `AmazonSSMManagedInstanceCore`, a private subnet with outbound internet (NAT) for package installs, and a security group with no inbound rules.
-4. Pick an Ubuntu or Debian AMI with the SSM agent (Ubuntu's official AMIs have it). Set `DEVHUB_POLICY_TOKEN` so workspaces can fetch the Claude Code policy.
-5. Developers need the AWS CLI with its Session Manager plugin, and permission for `ssm:StartSession` on the `AWS-StartSSHSession` document. Limit it to their own instances, e.g. with a condition on `ssm:resourceTag/devhub:owner`.
+4. Use an Ubuntu or Debian AMI with the SSM agent (Ubuntu's official AMIs have it).
+5. Developers need the AWS CLI with its Session Manager plugin, and `ssm:StartSession` on the `AWS-StartSSHSession` document. Limit it to their own instances, e.g. with a condition on `ssm:resourceTag/devhub:owner`.
 
-**Not yet:** GCP and Coder backends, idle detection (stopping is time-based), stopping running workspaces automatically when a budget runs out, and custom setup scripts per template.
+**Setup: Google Compute Engine**
+1. Set `workspaces.gcp.project` in the config file (or `DEVHUB_WORKSPACES_GCP_PROJECT`).
+2. Give Dev Hub's Kubernetes service account a Google service account through GKE Workload Identity, with `roles/compute.instanceAdmin.v1` on the project. If templates set a VM service account, also give it `roles/iam.serviceAccountUser` on that account.
+3. Use a subnetwork with Cloud NAT for package installs. Add a firewall rule allowing TCP 22 from IAP's range `35.235.240.0/20` to instances tagged `devhub-workspace`.
+4. Use an Ubuntu or Debian image family, e.g. `projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64`.
+5. Developers need the gcloud CLI and `roles/iap.tunnelResourceAccessor` (IAP-secured Tunnel User).
+
+**Setup: Coder**
+1. Set `workspaces.coder.url` in the config file (or `DEVHUB_WORKSPACES_CODER_URL`) and `CODER_SESSION_TOKEN` to a token for a Coder user who can create workspaces on behalf of others (an owner or user admin).
+2. Each person needs a Coder account with the same email as in Dev Hub (Coder can provision accounts from Okta too).
+3. In a Dev Hub template, name the Coder template and its organization (`default` works for single-org Coder). Dev Hub controls auto-stop, so either leave the Coder template's own auto-stop off or set it no shorter than Dev Hub's.
+
+Set `DEVHUB_POLICY_TOKEN` so AWS and GCP workspaces can fetch the Claude Code policy.
+
+**Not yet:** idle detection (stopping is time-based), stopping running workspaces automatically when a budget runs out, and custom setup scripts per template.
 
 ## Return on spend
 
@@ -141,7 +161,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 92 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 101 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
@@ -160,6 +180,8 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `CURSOR_API_KEY` | Cursor team spend (Cursor Admin API key) |
 | `DEVHUB_ADMIN_TOKEN` | Bearer token for automation (onboarding scripts, Terraform) |
 | `DEVHUB_WORKSPACES_AWS_REGION` | Turns on cloud workspaces in this AWS region (see [Cloud workspaces](#cloud-workspaces)) |
+| `DEVHUB_WORKSPACES_GCP_PROJECT` | Turns on Google Compute Engine workspaces in this project |
+| `DEVHUB_WORKSPACES_CODER_URL`, `CODER_SESSION_TOKEN` | Turns on Coder workspaces |
 | `DEVHUB_POLICY_TOKEN` | Read-only token developers' machines use to fetch the Claude Code policy (see [One policy for every tool](#one-policy-for-every-tool)) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
 | `DEVHUB_SLACK_WEBHOOK_URL` | Slack notifications for requests, decisions and used-up budgets |
@@ -346,7 +368,8 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |
-| Phase 2b | GCP and Coder workspace backends; idle detection | |
+| **Done (Phase 2b)** | Google Compute Engine and Coder workspace backends alongside AWS | Workspaces wherever the customer runs |
+| Phase 2c | Idle detection; stop workspaces when a budget runs out | |
 | Phase 3 | Per-PR preview environments with TTL | |
 
 ## Connector notes

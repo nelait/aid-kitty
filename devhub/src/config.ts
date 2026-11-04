@@ -77,8 +77,17 @@ export interface Config {
     cursor?: CursorConnectorConfig;
   };
   syncIntervalSeconds: number;
-  /** Cloud workspaces. AWS credentials come from the default chain (IRSA, instance profile, env). */
-  workspaces?: { aws?: { region: string }; maxPerUser?: number };
+  /**
+   * Cloud workspace backends; configure any of them. AWS uses the default credential chain
+   * (IRSA, Pod Identity, instance profile), GCP uses Application Default Credentials
+   * (Workload Identity), and Coder uses a session token for a Coder admin or template admin.
+   */
+  workspaces?: {
+    aws?: { region: string };
+    gcp?: { project: string };
+    coder?: { url: string; token: string };
+    maxPerUser?: number;
+  };
   /** How often to recount merged PRs for the return-on-spend report (default 6). */
   outputRefreshHours?: number;
   /** Pause between GitHub search calls; search allows about 30 a minute (default 2100). */
@@ -144,6 +153,18 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
 
   if (!cfg.workspaces?.aws && env.DEVHUB_WORKSPACES_AWS_REGION) {
     cfg.workspaces = { ...cfg.workspaces, aws: { region: env.DEVHUB_WORKSPACES_AWS_REGION } };
+  }
+  if (!cfg.workspaces?.gcp && env.DEVHUB_WORKSPACES_GCP_PROJECT) {
+    cfg.workspaces = { ...cfg.workspaces, gcp: { project: env.DEVHUB_WORKSPACES_GCP_PROJECT } };
+  }
+  if (!cfg.workspaces?.coder && env.DEVHUB_WORKSPACES_CODER_URL) {
+    cfg.workspaces = { ...cfg.workspaces, coder: { url: env.DEVHUB_WORKSPACES_CODER_URL, token: env.CODER_SESSION_TOKEN ?? "" } };
+  }
+  // Coder's token is a secret: allow it from env even when the URL is in the config file.
+  if (cfg.workspaces?.coder && !cfg.workspaces.coder.token) cfg.workspaces.coder.token = env.CODER_SESSION_TOKEN ?? "";
+  if (cfg.workspaces?.coder && !cfg.workspaces.coder.token) {
+    console.warn('Workspace backend "coder" is configured but CODER_SESSION_TOKEN is not set; it is disabled.');
+    delete cfg.workspaces.coder;
   }
   // Blank OIDC settings (e.g. the Helm chart's placeholders) mean "not configured".
   if (cfg.auth.oidc && (!cfg.auth.oidc.issuer || !cfg.auth.oidc.clientId)) delete cfg.auth.oidc;

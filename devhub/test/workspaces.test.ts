@@ -78,7 +78,7 @@ let templateId: number;
 
 before(async () => {
   cloud = new FakeCloud();
-  h = await harness({ policyToken: "pt" }, { workspaceProvider: cloud, now: () => clock });
+  h = await harness({ policyToken: "pt" }, { workspaceProviders: [cloud], now: () => clock });
   await admin(h.url, "POST", "/api/admin/users", [
     { email: "sam@acme.io", name: "Sam", monthly_budget_usd: 100 },
     { email: "kim@acme.io" },

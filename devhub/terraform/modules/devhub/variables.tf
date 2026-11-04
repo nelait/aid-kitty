@@ -97,7 +97,7 @@ variable "secrets" {
   description = <<-EOT
     Secret environment variables, stored in a Kubernetes Secret: OIDC_CLIENT_SECRET, DEVHUB_ADMIN_TOKEN,
     DEVHUB_SCIM_TOKEN, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY, DEVHUB_SLACK_WEBHOOK_URL, DEVHUB_LICENSE,
-    SMTP_URL, DEVHUB_EMAIL_FROM, DEVHUB_POLICY_TOKEN.
+    SMTP_URL, DEVHUB_EMAIL_FROM, DEVHUB_POLICY_TOKEN, CODER_SESSION_TOKEN.
     They are kept in Terraform state; protect the state accordingly, or pass existing_secret instead.
   EOT
   type        = map(string)

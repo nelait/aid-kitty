@@ -3,6 +3,7 @@ import { csrfOk, type Principal } from "../auth.js";
 import type { Db } from "../db.js";
 import { HttpError } from "../service.js";
 import { fmtUsd } from "../wallet.js";
+import { PROVIDER_LABELS } from "../providers/index.js";
 import { validateSshKey, type Workspace, type WorkspaceService, type WorkspaceTemplate } from "../workspaces.js";
 import { act, adminGuard, adminTabs, csrfField, esc, flash, options, page, wrap } from "./html.js";
 
@@ -71,7 +72,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
       const tName = new Map(templates.map((t) => [t.id, t.name]));
       const cards = mine
         .map((w) => {
-          const hint = w.machine_id && ws.provider ? ws.provider.connectHint(w.machine_id, w.name) : "";
+          const hint = ws.hintFor(w) ?? "";
           return `<div class="card"><h2>${esc(w.name)} <span class="badge">${STATE_LABEL[w.state] ?? esc(w.state)}</span></h2>
             <p class="muted">${esc(tName.get(w.template_id) ?? "")} · ${perHour(w.hourly_usd_e4)}/hour while running · ${w.disk_gb} GB disk
             ${w.stop_at && (w.state === "running" || w.state === "starting") ? `<br>Stops automatically at ${when(w.stop_at)}.` : ""}
@@ -196,18 +197,53 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
 
   // ------------------------------------------------------------------ admin
 
-  const templateForm = (p: Principal, action: string, t: WorkspaceTemplate | null, label: string) => {
-    const c = t ? (JSON.parse(t.config) as Record<string, unknown>) : {};
+  /** The fields each backend's template needs. */
+  const machineFields = (kind: string, c: Record<string, unknown>) => {
     const v = (k: string, d = "") => esc(String(c[k] ?? d));
-    return `<form method="post" action="${action}">${csrfField(p)}
+    const field = (name: string, label: string, value: string, extra = "") =>
+      `<div><label>${label}</label><input name="${name}" value="${value}" ${extra}></div>`;
+    switch (kind) {
+      case "gcp":
+        return [
+          field("zone", "Zone", v("zone"), 'required placeholder="us-central1-a"'),
+          field("machineType", "Machine type", v("machineType", "e2-standard-4"), "required"),
+          field("image", "Image (Ubuntu or Debian)", v("image", "projects/ubuntu-os-cloud/global/images/family/ubuntu-2404-lts-amd64"), "required"),
+          field("subnetwork", "Subnetwork (no external IPs)", v("subnetwork"), 'required placeholder="regions/us-central1/subnetworks/dev"'),
+          field("diskGb", "Disk (GB)", v("diskGb", "50"), 'type="number" min="10" max="2000" required'),
+          field("serviceAccount", "VM service account (optional)", v("serviceAccount"), 'placeholder="devhub-ws@project.iam.gserviceaccount.com"'),
+        ].join("");
+      case "coder":
+        return [
+          field("template", "Coder template name", v("template"), "required"),
+          field("organization", "Coder organization", v("organization", "default"), "required"),
+          field("diskGb", "Disk (GB, for the cost estimate)", v("diskGb", "0"), 'type="number" min="0" max="2000"'),
+        ].join("");
+      default:
+        return [
+          field("imageId", "AMI (Ubuntu or Debian with the SSM agent)", v("imageId"), 'required placeholder="ami-0abc..."'),
+          field("instanceType", "Instance type", v("instanceType", "t3.xlarge"), "required"),
+          field("diskGb", "Disk (GB)", v("diskGb", "50"), 'type="number" min="8" max="2000" required'),
+          field("subnetId", "Subnet (private)", v("subnetId"), 'required placeholder="subnet-..."'),
+          field("securityGroupIds", "Security groups", esc(((c.securityGroupIds as string[]) ?? []).join(", ")), 'required placeholder="sg-..."'),
+          field("instanceProfile", "Instance profile (with SSM access)", v("instanceProfile"), "required"),
+        ].join("");
+    }
+  };
+
+  const machineSummary = (t: WorkspaceTemplate) => {
+    const c = JSON.parse(t.config) as Record<string, unknown>;
+    const disk = Number(c.diskGb) ? ` · ${c.diskGb} GB` : "";
+    if (t.provider === "gcp") return `${esc(c.machineType)} in ${esc(c.zone)}${disk}`;
+    if (t.provider === "coder") return `Coder template ${esc(c.template)}${disk}`;
+    return `${esc(c.instanceType)}${disk}`;
+  };
+
+  const templateForm = (p: Principal, action: string, t: WorkspaceTemplate | null, label: string, kind: string) => {
+    const c = t ? (JSON.parse(t.config) as Record<string, unknown>) : {};
+    return `<form method="post" action="${action}">${csrfField(p)}<input type="hidden" name="provider" value="${esc(kind)}">
       <div class="grid">
         <div><label>Name</label><input name="name" value="${esc(t?.name ?? "")}" required placeholder="Standard (4 vCPU, 16 GB)"></div>
-        <div><label>AMI (Ubuntu or Debian with the SSM agent)</label><input name="imageId" value="${v("imageId")}" required placeholder="ami-0abc..."></div>
-        <div><label>Instance type</label><input name="instanceType" value="${v("instanceType", "t3.xlarge")}" required></div>
-        <div><label>Disk (GB)</label><input name="diskGb" type="number" min="8" max="2000" value="${v("diskGb", "50")}" required></div>
-        <div><label>Subnet (private)</label><input name="subnetId" value="${v("subnetId")}" required placeholder="subnet-..."></div>
-        <div><label>Security groups</label><input name="securityGroupIds" value="${esc(((c.securityGroupIds as string[]) ?? []).join(", "))}" required placeholder="sg-..."></div>
-        <div><label>Instance profile (with SSM access)</label><input name="instanceProfile" value="${v("instanceProfile")}" required></div>
+        ${machineFields(kind, c)}
         <div><label>Price per running hour (USD)</label><input name="hourly_usd" type="number" min="0" step="0.0001" value="${t ? t.hourly_usd_e4 / 10_000 : ""}" required placeholder="0.1664"></div>
         <div><label>Disk price per GB-month (USD)</label><input name="storage_gb_month_usd" type="number" min="0" step="0.001" value="${t ? t.storage_gb_month_cents / 100 : "0.08"}"></div>
         <div><label>Stop automatically after (hours)</label><input name="stop_after_hours" type="number" min="1" max="24" value="${t?.stop_after_hours ?? 8}"></div>
@@ -216,20 +252,22 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
       <p><button>${label}</button></p></form>`;
   };
 
-  const templateBody = (req: Request) => ({
+  const CONFIG_FIELDS: Record<string, string[]> = {
+    aws: ["imageId", "instanceType", "diskGb", "subnetId", "securityGroupIds", "instanceProfile"],
+    gcp: ["zone", "machineType", "image", "subnetwork", "diskGb", "serviceAccount"],
+    coder: ["template", "organization", "diskGb"],
+  };
+
+  const templateBody = (req: Request, kind: string) => ({
+    provider: kind,
     name: req.body.name,
     hourly_usd: req.body.hourly_usd,
     storage_gb_month_usd: req.body.storage_gb_month_usd || 0.08,
     stop_after_hours: Number(req.body.stop_after_hours || 8),
     enabled: req.body.enabled !== "0",
-    config: {
-      imageId: req.body.imageId,
-      instanceType: req.body.instanceType,
-      diskGb: Number(req.body.diskGb),
-      subnetId: req.body.subnetId,
-      securityGroupIds: req.body.securityGroupIds,
-      instanceProfile: req.body.instanceProfile,
-    },
+    config: Object.fromEntries(
+      (CONFIG_FIELDS[kind] ?? []).map((k) => [k, k === "diskGb" ? Number(req.body[k] || 0) : req.body[k]]),
+    ),
   });
 
   r.get(
@@ -242,7 +280,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
           page(
             "Workspaces",
             p,
-            `<h1>Admin</h1>${adminTabs("/admin/workspaces")}<div class="card"><p>Workspaces aren't configured. Set <code>DEVHUB_WORKSPACES_AWS_REGION</code> and give Dev Hub an AWS role that can run, start, stop, terminate and describe EC2 instances (see the README).</p></div>`,
+            `<h1>Admin</h1>${adminTabs("/admin/workspaces")}<div class="card"><p>Workspaces aren't configured. Set up at least one backend: <code>DEVHUB_WORKSPACES_AWS_REGION</code> (AWS EC2), <code>DEVHUB_WORKSPACES_GCP_PROJECT</code> (Google Compute Engine), or <code>DEVHUB_WORKSPACES_CODER_URL</code> with <code>CODER_SESSION_TOKEN</code> (Coder). The README covers the permissions each needs.</p></div>`,
           ),
         );
       }
@@ -267,18 +305,25 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
                 .join("") || `<tr><td colspan="7" class="muted">No workspaces.</td></tr>`
             }</tbody></table></div>
           <div class="card scroll"><h2>Templates</h2>
-            <table><thead><tr><th>Name</th><th>Instance</th><th class="n">Per hour</th><th class="n">Auto-stop</th><th>Available</th></tr></thead><tbody>
+            <table><thead><tr><th>Name</th><th>Backend</th><th>Machine</th><th class="n">Per hour</th><th class="n">Auto-stop</th><th>Available</th></tr></thead><tbody>
             ${
               templates
-                .map((t) => {
-                  const c = JSON.parse(t.config);
-                  return `<tr><td><a href="/admin/workspaces/templates/${t.id}">${esc(t.name)}</a></td><td>${esc(c.instanceType)} · ${c.diskGb} GB</td>
-                    <td class="n">${perHour(t.hourly_usd_e4)}</td><td class="n">${t.stop_after_hours}h</td><td>${t.enabled ? "Yes" : "No"}</td></tr>`;
-                })
-                .join("") || `<tr><td colspan="5" class="muted">No templates yet.</td></tr>`
+                .map(
+                  (t) => `<tr><td><a href="/admin/workspaces/templates/${t.id}">${esc(t.name)}</a></td>
+                    <td>${esc(PROVIDER_LABELS[t.provider] ?? t.provider)}${ws.providers.has(t.provider) ? "" : ` <span class="badge">not configured</span>`}</td>
+                    <td>${machineSummary(t)}</td>
+                    <td class="n">${perHour(t.hourly_usd_e4)}</td><td class="n">${t.stop_after_hours}h</td><td>${t.enabled ? "Yes" : "No"}</td></tr>`,
+                )
+                .join("") || `<tr><td colspan="6" class="muted">No templates yet.</td></tr>`
             }</tbody></table></div>
-          <div class="card"><h2>Add a template</h2>${templateForm(p, "/admin/workspaces/templates/new", null, "Add template")}
-            <p class="muted">Use your on-demand price for the instance type and region. Dev Hub charges running hours and disk to each person's budget.</p></div>`,
+          <div class="card"><h2>Add a template</h2>
+            ${[...ws.providers.keys()]
+              .map(
+                (kind, i) => `<details${i === 0 ? " open" : ""} style="margin-bottom:12px"><summary><b>${esc(PROVIDER_LABELS[kind] ?? kind)}</b></summary>
+                  ${templateForm(p, "/admin/workspaces/templates/new", null, `Add ${esc(PROVIDER_LABELS[kind] ?? kind)} template`, kind)}</details>`,
+              )
+              .join("")}
+            <p class="muted">Use your on-demand price for the machine type and region. Dev Hub charges running hours and disk to each person's budget. Coder templates provision machines through Coder; give Dev Hub's price as your estimate of what one costs per hour.</p></div>`,
         ),
       );
     }),
@@ -290,7 +335,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
       const p = adminGuard(req, res);
       if (!p) return;
       await act(res, "/admin/workspaces", async () => {
-        const t = await ws.saveTemplate(null, templateBody(req), p.label);
+        const t = await ws.saveTemplate(null, templateBody(req, String(req.body.provider ?? "")), p.label);
         return `Added template ${t.name}.`;
       });
     }),
@@ -308,7 +353,8 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
           t.name,
           p,
           `${flash(req)}<h1>${esc(t.name)}</h1>${adminTabs("/admin/workspaces")}
-          <div class="card">${templateForm(p, `/admin/workspaces/templates/${t.id}`, t, "Save")}
+          <div class="card"><p class="muted">${esc(PROVIDER_LABELS[t.provider] ?? t.provider)} template. The backend can't be changed; add a new template for another one.</p>
+            ${templateForm(p, `/admin/workspaces/templates/${t.id}`, t, "Save", t.provider)}
             <p class="muted">Changes apply to new workspaces. Existing ones keep the machine and price they were created with.</p></div>`,
         ),
       );
@@ -322,7 +368,9 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
       if (!p) return;
       const id = Number(req.params.id);
       await act(res, `/admin/workspaces/templates/${id}`, async () => {
-        await ws.saveTemplate(id, templateBody(req), p.label);
+        const t = await db.get<WorkspaceTemplate>("SELECT provider FROM workspace_templates WHERE id = ?", id);
+        if (!t) throw new HttpError(404, "Template not found.");
+        await ws.saveTemplate(id, templateBody(req, t.provider), p.label);
         return "Saved.";
       });
     }),
