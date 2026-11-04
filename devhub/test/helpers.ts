@@ -95,10 +95,28 @@ export class MockGitHub {
   /** login -> premium request usage items for the current month */
   premium = new Map<string, { product: string; netAmount: number }[]>();
   premiumCalls = 0;
+  exclusions: Record<string, unknown> = {};
+  exclusionPuts = 0;
   url = "";
   private server = createServer((req, res) => {
     const u = new URL(req.url!, "http://x");
     if (req.headers.authorization !== "Bearer gh-token") return void res.writeHead(401).end("{}");
+    if (u.pathname === "/orgs/acme/copilot/content_exclusion") {
+      if (req.method === "GET") {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(this.exclusions));
+        return;
+      }
+      if (req.method === "PUT") {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          this.exclusions = JSON.parse(body);
+          this.exclusionPuts++;
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ message: "ok" }));
+        });
+        return;
+      }
+    }
     if (u.pathname === "/organizations/acme/settings/billing/premium_request/usage") {
       this.premiumCalls++;
       const user = (u.searchParams.get("user") ?? "").toLowerCase();

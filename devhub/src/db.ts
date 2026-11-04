@@ -153,6 +153,12 @@ CREATE TABLE IF NOT EXISTS budget_alerts (
   sent_at TEXT NOT NULL,
   PRIMARY KEY (user_id, period, level)
 );
+CREATE TABLE IF NOT EXISTS policies (
+  scope TEXT PRIMARY KEY,
+  doc TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

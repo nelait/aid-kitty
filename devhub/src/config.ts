@@ -50,6 +50,8 @@ export interface Config {
   databaseUrl?: string;
   /** Bearer token for automation (Terraform, scripts). Acts as an admin. */
   adminToken?: string;
+  /** Bearer token developers' machines use to fetch the Claude Code policy (read-only). */
+  policyToken?: string;
   /** Bearer token the IdP uses for SCIM provisioning at /scim/v2. SCIM is off when unset. */
   scimToken?: string;
   auth: {
@@ -106,6 +108,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     databaseUrl: env.DATABASE_URL || undefined,
     adminToken: env.DEVHUB_ADMIN_TOKEN,
     scimToken: env.DEVHUB_SCIM_TOKEN,
+    policyToken: env.DEVHUB_POLICY_TOKEN || undefined,
     license: { file: env.DEVHUB_LICENSE_FILE, text: env.DEVHUB_LICENSE },
     auth: {
       devLogin: env.DEVHUB_DEV_LOGIN === "true",

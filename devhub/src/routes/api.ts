@@ -12,6 +12,20 @@ import {
   spendReport,
 } from "../service.js";
 import { licenseStatus } from "../license.js";
+import { timingSafeEqual } from "node:crypto";
+import {
+  applyCopilotExclusions,
+  claudeSettings,
+  effective,
+  effectiveForEmail,
+  gatewayManagedYaml,
+  getOrgPolicy,
+  getTeamPolicy,
+  helperScript,
+  policyVersion,
+  saveOrgPolicy,
+  saveTeamPolicy,
+} from "../policy.js";
 import type { SyncService } from "../sync.js";
 import { currentPeriod, usdToCents, walletFor } from "../wallet.js";
 
@@ -195,6 +209,75 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
       const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
       await installLicense(db, text, req.principal!.label);
       res.json(await licenseStatus(db, cfg));
+    }),
+  );
+
+  // ---- Policy ----
+  r.get(
+    "/admin/policy",
+    requireAdmin,
+    wrap(async (_req, res) => {
+      const teams = await db.all<{ id: number; name: string }>("SELECT id, name FROM teams ORDER BY name");
+      const out = [];
+      for (const t of teams) out.push({ ...t, policy: await getTeamPolicy(db, t.id) });
+      res.json({ version: await policyVersion(db), org: await getOrgPolicy(db), teams: out });
+    }),
+  );
+  r.put("/admin/policy", requireAdmin, wrap(async (req, res) => res.json(await saveOrgPolicy(db, req.body ?? {}, req.principal!.label))));
+  r.put(
+    "/admin/policy/teams/:id",
+    requireAdmin,
+    wrap(async (req, res) => res.json(await saveTeamPolicy(db, Number(req.params.id), req.body ?? {}, req.principal!.label))),
+  );
+  r.get(
+    "/admin/policy/claude-managed-settings.json",
+    requireAdmin,
+    wrap(async (req, res) => {
+      const org = await getOrgPolicy(db);
+      const teamId = Number(req.query.team);
+      const team = teamId ? await db.get<{ id: number; name: string }>("SELECT id, name FROM teams WHERE id = ?", teamId) : undefined;
+      const p = team ? effective(org, { name: team.name, policy: await getTeamPolicy(db, team.id) }) : effective(org);
+      res.setHeader("content-disposition", 'attachment; filename="managed-settings.json"');
+      res.json(claudeSettings(p));
+    }),
+  );
+  r.get(
+    "/admin/policy/gateway.yaml",
+    requireAdmin,
+    wrap(async (_req, res) => {
+      res.setHeader("content-type", "text/yaml; charset=utf-8");
+      res.setHeader("content-disposition", 'attachment; filename="gateway-managed.yaml"');
+      res.send(await gatewayManagedYaml(db));
+    }),
+  );
+  r.get("/admin/policy/devhub-policy.sh", requireAdmin, (_req, res) => {
+    res.setHeader("content-type", "text/x-shellscript; charset=utf-8");
+    res.setHeader("content-disposition", 'attachment; filename="devhub-policy"');
+    res.send(helperScript(cfg));
+  });
+  r.post(
+    "/admin/policy/copilot",
+    requireAdmin,
+    wrap(async (req, res) => res.json(await applyCopilotExclusions(db, cfg, req.principal!.label, req.body?.dryRun !== false))),
+  );
+
+  /**
+   * What Claude Code's policyHelper fetches on developers' machines. Read-only, with its own
+   * token so laptops never hold an admin credential.
+   */
+  r.get(
+    "/policy/claude-code",
+    wrap(async (req, res) => {
+      const sent = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? "";
+      const token = cfg.policyToken ?? "";
+      const tokenOk = !!token && sent.length === token.length && timingSafeEqual(Buffer.from(sent), Buffer.from(token));
+      if (!tokenOk && !req.principal?.isAdmin) return res.status(401).json({ error: "policy token required" });
+      const email = typeof req.query.email === "string" && req.query.email.includes("@") ? req.query.email : undefined;
+      const p = await effectiveForEmail(db, email);
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("x-devhub-policy-version", await policyVersion(db));
+      res.setHeader("x-devhub-policy-team", p.team ?? "");
+      res.json({ managedSettings: claudeSettings(p) });
     }),
   );
 

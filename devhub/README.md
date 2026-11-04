@@ -25,6 +25,32 @@ Dev Hub doesn't rebuild any of that. It sits above the gateway and adds what the
 
 The same connector also works with the **Claude Enterprise Admin API** (`mode: "enterprise"`), which serves the same spend-limits API at `api.anthropic.com`.
 
+## One policy for every tool
+
+Admins write one AI usage policy under **Admin → Policy**, and Dev Hub translates it for each tool:
+
+| Rule | Claude Code | GitHub Copilot | Cursor |
+| --- | --- | --- | --- |
+| Allowed Claude models | `availableModels` + `enforceAvailableModels` | — | — |
+| Protected files (gitignore patterns) | `Read(...)` and `Edit(...)` deny rules | Org content exclusions for every repository (`"*"`) | Suggested `.cursorignore` (not enforced) |
+| Blocked shell commands | `Bash(...)` deny rules | — | — |
+| Allowed / blocked MCP servers | `allowedMcpServers` / `deniedMcpServers` | — | — |
+| Web fetch and search off | `WebFetch` and `WebSearch` deny rules | — | — |
+| Block bypass-permissions mode | `disableBypassPermissionsMode: "disable"` | — | — |
+| Extra managed settings (advanced JSON) | Merged in as-is | — | — |
+
+**Teams can only tighten.** A team's rules add denies, narrow the allowed models or MCP servers, or turn web access off. Dev Hub refuses a team rule that would loosen the org policy, and refuses an org change that a team's rules would then loosen.
+
+**How each tool gets it:**
+
+- **Claude Code, live (recommended):** Dev Hub generates a small [`policyHelper`](https://code.claude.com/docs/en/settings-reference#policyhelper) script. Deploy it once with MDM, plus `/etc/devhub/policy.env` (Dev Hub URL and `DEVHUB_POLICY_TOKEN`) and a `policyHelper` entry in `managed-settings.json`. Claude Code then fetches the person's policy at startup and every 15 minutes from `GET /api/policy/claude-code`. The helper keeps the last policy it received, so an outage doesn't block anyone. On the very first run with no network it fails, so Claude Code doesn't start without a policy. The helper identifies the person by their git email. That can't be verified, so team rules apply on a best-effort basis; because teams only tighten, a wrong email still gets the full org policy.
+- **Claude Code, static:** download a `managed-settings.json` for the org or a team and deploy it with MDM.
+- **Claude apps gateway:** download the `managed.policies` block and paste it into `gateway.yaml`. Team entries match the IdP group with the team's exact name, which the gateway reads from the signed-in token. This is the way to enforce team rules strictly. `forceLoginMethod` and `forceLoginOrgUUID` are left out of this block, as the gateway requires.
+- **GitHub Copilot:** the page previews the change and applies it when an admin clicks **Apply to GitHub**. Only the all-repositories (`"*"`) rule changes; per-repository rules set in GitHub are kept. GitHub's API drops comments in these rules, and this API is in public preview. The org owner's token needs the `copilot` scope.
+- **Cursor:** Cursor has no admin policy API, so Dev Hub only suggests a `.cursorignore` to commit to repositories.
+
+Every policy change is written to the audit log with its before and after.
+
 ## Budget alerts
 
 After every sync (and whenever an admin changes a budget, team or spend), Dev Hub checks each active person's whole budget across all tools:
@@ -62,7 +88,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 62 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 73 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
@@ -80,6 +106,7 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `GITHUB_ORG`, `GITHUB_TOKEN` | Copilot seats and premium-request overage. The overage report requires an org admin's token; seats need `manage_billing:copilot` or `read:org` |
 | `CURSOR_API_KEY` | Cursor team spend (Cursor Admin API key) |
 | `DEVHUB_ADMIN_TOKEN` | Bearer token for automation (onboarding scripts, Terraform) |
+| `DEVHUB_POLICY_TOKEN` | Read-only token developers' machines use to fetch the Claude Code policy (see [One policy for every tool](#one-policy-for-every-tool)) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
 | `DEVHUB_SLACK_WEBHOOK_URL` | Slack notifications for requests, decisions and used-up budgets |
 | `SMTP_URL`, `DEVHUB_EMAIL_FROM` | Email for budget alerts, e.g. `smtps://user:pass@smtp.acme.io:465` and `Dev Hub <devhub@acme.io>`. Without `SMTP_URL`, emails are only logged |
@@ -257,12 +284,12 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
 | **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
+| **Done (Phase 1j)** | One policy for every tool: Claude Code (live helper, static file, gateway block), Copilot content exclusions; team rules only tighten | Security teams set rules once |
 | **Done (Phase 1i)** | Keyless-signed images, SPDX SBOM attestation, SLSA provenance, deploy by digest | Customers can verify what they run |
 | **Done (Phase 1h)** | Budget alerts by email at 80% and 100%; managers told when someone runs out | People hear before they're blocked |
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |
-| P2 | Policy pack: generate the gateway's per-group `managed` blocks (MCP allowlist, permission denies) from one Dev Hub policy | One policy across tools |
 | P2 | Spend → output reporting (join spend with GitHub PRs and commits) | ROI view for finance |
 | Phase 2 | Workspaces in the customer's AWS/GCP (Coder as a backend, or a built-in EC2/GCE template) | |
 | Phase 3 | Per-PR preview environments with TTL | |

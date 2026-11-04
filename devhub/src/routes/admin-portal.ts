@@ -1,5 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
-import { csrfOk, type Principal } from "../auth.js";
+import type { Principal } from "../auth.js";
 import { installLicense, LINKABLE_TOOLS, linkIdentity, parseCsv, ROLES, saveTeam, upsertUsers } from "../admin.js";
 import type { Config } from "../config.js";
 import type { Db, Team, User } from "../db.js";
@@ -7,7 +7,7 @@ import { licenseStatus } from "../license.js";
 import { HttpError } from "../service.js";
 import type { SyncService } from "../sync.js";
 import { currentPeriod, fmtUsd, walletFor } from "../wallet.js";
-import { adminTabs, back, csrfField, esc, flash, options, page, wrap } from "./html.js";
+import { act, adminGuard, adminTabs, csrfField, esc, flash, options, page, wrap } from "./html.js";
 
 /** An empty form field means "none / use the default". */
 const blankToNull = (v: unknown) => (v === undefined || String(v).trim() === "" ? null : String(v).trim());
@@ -17,33 +17,7 @@ export function adminPortalRoutes(db: Db, cfg: Config, sync: SyncService) {
   const r = express.Router();
   r.use("/admin", express.urlencoded({ extended: false, limit: "512kb" }));
 
-  /** Admins only; every POST also needs the session's CSRF token. */
-  const admin = (req: Request, res: Response): Principal | null => {
-    const p = req.principal;
-    if (!p?.user) {
-      res.redirect("/");
-      return null;
-    }
-    if (!p.isAdmin) {
-      res.status(403).send(page("Admin", p, `<div class="card">Admins only.</div>`));
-      return null;
-    }
-    if (req.method === "POST" && !csrfOk(req)) {
-      res.status(403).send(page("Admin", p, `<div class="card">Your session expired. Reload the page and try again.</div>`));
-      return null;
-    }
-    return p;
-  };
-
-  /** Run a form action and come back with its outcome as a message. */
-  const act = async (res: Response, to: string, fn: () => Promise<string>) => {
-    try {
-      back(res, to, await fn());
-    } catch (e) {
-      if (e instanceof HttpError) return back(res, to, e.message);
-      throw e;
-    }
-  };
+  const admin = adminGuard;
 
   const teamOptions = async (current: number | null) => {
     const teams = await db.all<{ id: number; name: string }>("SELECT id, name FROM teams ORDER BY name");

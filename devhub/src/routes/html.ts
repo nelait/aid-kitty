@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import type { Principal } from "../auth.js";
+import { csrfOk, type Principal } from "../auth.js";
+import { HttpError } from "../service.js";
 
 /** Shared page shell and helpers for the server-rendered portal. Everything user-controlled goes through esc(). */
 
@@ -65,6 +66,7 @@ const ADMIN_TABS: [string, string][] = [
   ["/admin/people", "People"],
   ["/admin/teams", "Teams"],
   ["/admin/unmatched", "Unmatched spend"],
+  ["/admin/policy", "Policy"],
   ["/admin/license", "License"],
 ];
 
@@ -74,3 +76,31 @@ export const adminTabs = (active: string) =>
 /** `<option>`s for a select, marking the current value. */
 export const options = (items: [string, string][], current: string | null | undefined) =>
   items.map(([v, label]) => `<option value="${esc(v)}"${v === (current ?? "") ? " selected" : ""}>${esc(label)}</option>`).join("");
+
+/** Admins only; every POST also needs the session's CSRF token. Sends the refusal itself and returns null. */
+export function adminGuard(req: Request, res: Response): Principal | null {
+  const p = req.principal;
+  if (!p?.user) {
+    res.redirect("/");
+    return null;
+  }
+  if (!p.isAdmin) {
+    res.status(403).send(page("Admin", p, `<div class="card">Admins only.</div>`));
+    return null;
+  }
+  if (req.method === "POST" && !csrfOk(req)) {
+    res.status(403).send(page("Admin", p, `<div class="card">Your session expired. Reload the page and try again.</div>`));
+    return null;
+  }
+  return p;
+}
+
+/** Run a form action and redirect back with its outcome (or its validation error) as a message. */
+export async function act(res: Response, to: string, fn: () => Promise<string>): Promise<void> {
+  try {
+    back(res, to, await fn());
+  } catch (e) {
+    if (e instanceof HttpError) return back(res, to, e.message);
+    throw e;
+  }
+}
