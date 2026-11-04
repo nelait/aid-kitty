@@ -6,6 +6,8 @@ import { apiRoutes } from "./routes/api.js";
 import { adminPortalRoutes } from "./routes/admin-portal.js";
 import { policyPortalRoutes } from "./routes/policy-portal.js";
 import { roiPortalRoutes } from "./routes/roi-portal.js";
+import { navOptions } from "./routes/html.js";
+import { workspacesPortalRoutes } from "./routes/workspaces-portal.js";
 import { portalRoutes } from "./routes/portal.js";
 import { scimRoutes } from "./routes/scim.js";
 import type { SyncService } from "./sync.js";
@@ -29,6 +31,8 @@ export function createApp(db: Db, cfg: Config, sync: SyncService) {
   app.use(adminPortalRoutes(db, cfg, sync));
   app.use(policyPortalRoutes(db, cfg));
   app.use(roiPortalRoutes(db, sync));
+  app.use(workspacesPortalRoutes(db, sync.workspaces));
+  navOptions.workspaces = sync.workspaces.enabled;
   app.use(portalRoutes(db, cfg, sync));
   return app;
 }

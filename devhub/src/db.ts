@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS users (
   monthly_budget_cents INTEGER,
   created_at TEXT NOT NULL DEFAULT ${now},
   scim_external_id TEXT,
-  deleted_at TEXT
+  deleted_at TEXT,
+  ssh_public_key TEXT
 );
 CREATE TABLE IF NOT EXISTS spend (
   period TEXT NOT NULL,
@@ -152,6 +153,40 @@ CREATE TABLE IF NOT EXISTS budget_alerts (
   level TEXT NOT NULL CHECK (level IN ('warning','exhausted')),
   sent_at TEXT NOT NULL,
   PRIMARY KEY (user_id, period, level)
+);
+CREATE TABLE IF NOT EXISTS workspace_templates (
+  id ${pk},
+  name TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL,
+  config TEXT NOT NULL,
+  hourly_usd_e4 INTEGER NOT NULL,
+  storage_gb_month_cents INTEGER NOT NULL,
+  stop_after_hours INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS workspaces (
+  id ${pk},
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  template_id INTEGER NOT NULL REFERENCES workspace_templates(id),
+  name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  machine_id TEXT,
+  state TEXT NOT NULL,
+  detail TEXT,
+  disk_gb INTEGER NOT NULL,
+  hourly_usd_e4 INTEGER NOT NULL,
+  storage_gb_month_cents INTEGER NOT NULL,
+  stop_at TEXT,
+  created_at TEXT NOT NULL,
+  terminated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS workspace_runs (
+  id ${pk},
+  workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  hourly_usd_e4 INTEGER NOT NULL,
+  started_at TEXT NOT NULL,
+  stopped_at TEXT
 );
 CREATE TABLE IF NOT EXISTS output_metrics (
   period TEXT NOT NULL,
@@ -255,6 +290,7 @@ async function openSqlite(path: string): Promise<Db> {
   addColumn("users", "scim_external_id", "TEXT");
   addColumn("users", "deleted_at", "TEXT");
   addColumn("teams", "scim_external_id", "TEXT");
+  addColumn("users", "ssh_public_key", "TEXT");
   s.exec(schema("sqlite"));
   // Earlier versions matched emails and GitHub logins case-insensitively in SQL; now the
   // app stores them lowercase so the same queries work on Postgres.
@@ -329,6 +365,8 @@ async function openPostgres(url: string): Promise<Db> {
   await db.tx(async (q) => {
     await q.run("SELECT pg_advisory_xact_lock(4242001)");
     for (const stmt of schema("postgres").split(";").map((x) => x.trim()).filter(Boolean)) await q.run(stmt);
+    // Columns added after a table first shipped.
+    await q.run("ALTER TABLE users ADD COLUMN IF NOT EXISTS ssh_public_key TEXT");
   });
   return db;
 }

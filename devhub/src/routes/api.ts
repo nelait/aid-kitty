@@ -13,6 +13,7 @@ import {
 } from "../service.js";
 import { licenseStatus } from "../license.js";
 import { roiCsv, roiReport } from "../roi.js";
+import { validateSshKey } from "../workspaces.js";
 import { timingSafeEqual } from "node:crypto";
 import {
   applyCopilotExclusions,
@@ -210,6 +211,89 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
       const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
       await installLicense(db, text, req.principal!.label);
       res.json(await licenseStatus(db, cfg));
+    }),
+  );
+
+  // ---- Workspaces ----
+  const ws = sync.workspaces;
+  const owned = async (req: Request) => {
+    const u = req.principal!.user;
+    if (!u) throw new HttpError(400, "the automation token has no workspaces");
+    const w = await ws.get(Number(req.params.id));
+    if (w.user_id !== u.id || w.state === "terminated") throw new HttpError(404, "workspace not found");
+    return { u, w };
+  };
+  const withHint = (w: Awaited<ReturnType<typeof ws.get>>) => ({
+    ...w,
+    connect: w.machine_id && ws.provider ? ws.provider.connectHint(w.machine_id, w.name) : null,
+  });
+
+  r.get(
+    "/me/workspaces",
+    requireUser,
+    wrap(async (req, res) => {
+      const u = req.principal!.user;
+      if (!u) throw new HttpError(400, "the automation token has no workspaces");
+      const key = await db.get<{ k: string | null }>("SELECT ssh_public_key AS k FROM users WHERE id = ?", u.id);
+      res.json({
+        enabled: ws.enabled,
+        ssh_public_key: key?.k ?? null,
+        templates: (await ws.templates(true)).map((t) => ({ id: t.id, name: t.name, hourly_usd: t.hourly_usd_e4 / 10_000, stop_after_hours: t.stop_after_hours })),
+        workspaces: (await ws.listFor(u.id)).map(withHint),
+      });
+    }),
+  );
+  r.put(
+    "/me/ssh-key",
+    requireUser,
+    wrap(async (req, res) => {
+      const u = req.principal!.user;
+      if (!u) throw new HttpError(400, "the automation token has no SSH key");
+      const key = validateSshKey(String(req.body?.ssh_public_key ?? ""));
+      await db.run("UPDATE users SET ssh_public_key = ? WHERE id = ?", key, u.id);
+      await audit(db, u.email, "ssh_key.saved", { fingerprintHint: key.slice(-20) });
+      res.json({ ok: true });
+    }),
+  );
+  r.post(
+    "/me/workspaces",
+    requireUser,
+    wrap(async (req, res) => {
+      const u = req.principal!.user;
+      if (!u) throw new HttpError(400, "the automation token has no workspaces");
+      res.status(201).json(withHint(await ws.create(u, Number(req.body?.template_id), String(req.body?.name ?? ""))));
+    }),
+  );
+  r.post(
+    "/me/workspaces/:id/:action(start|stop|extend|delete)",
+    requireUser,
+    wrap(async (req, res) => {
+      const { u, w } = await owned(req);
+      const a = req.params.action;
+      if (a === "start") await ws.start(u, w);
+      else if (a === "stop") await ws.stop(w, u.email);
+      else if (a === "extend") await ws.extend(w, u.email);
+      else await ws.destroy(w, u.email);
+      res.json(withHint(await ws.get(w.id)));
+    }),
+  );
+
+  r.get("/admin/workspace-templates", requireAdmin, wrap(async (_req, res) => res.json(await ws.templates())));
+  r.post("/admin/workspace-templates", requireAdmin, wrap(async (req, res) => res.status(201).json(await ws.saveTemplate(null, req.body ?? {}, req.principal!.label))));
+  r.put(
+    "/admin/workspace-templates/:id",
+    requireAdmin,
+    wrap(async (req, res) => res.json(await ws.saveTemplate(Number(req.params.id), req.body ?? {}, req.principal!.label))),
+  );
+  r.get("/admin/workspaces", requireAdmin, wrap(async (_req, res) => res.json(await ws.listAll())));
+  r.post(
+    "/admin/workspaces/:id/:action(stop|delete)",
+    requireAdmin,
+    wrap(async (req, res) => {
+      const w = await ws.get(Number(req.params.id));
+      if (req.params.action === "stop") await ws.stop(w, req.principal!.label);
+      else await ws.destroy(w, req.principal!.label);
+      res.json(await ws.get(w.id));
     }),
   );
 

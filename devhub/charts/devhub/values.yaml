@@ -80,3 +80,6 @@ affinity: {}
 serviceAccount:
   create: true
   name: ""
+  # For cloud workspaces on AWS, give Dev Hub an IAM role, e.g. with IRSA:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/devhub
+  annotations: {}

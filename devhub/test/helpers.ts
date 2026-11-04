@@ -7,6 +7,7 @@ import pg from "pg";
 import { openDb, type Db } from "../src/db.js";
 import { issueLicense, setLicensePublicKeyForTests } from "../src/license.js";
 import type { Email } from "../src/notify.js";
+import type { MachineSpec, MachineState, WorkspaceProvider } from "../src/providers/aws.js";
 import { SyncService } from "../src/sync.js";
 
 // A throwaway signing key, so tests exercise real signature checks.
@@ -245,7 +246,10 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function harness(over: Partial<Config> = {}): Promise<Harness> {
+export async function harness(
+  over: Partial<Config> = {},
+  opts: { workspaceProvider?: WorkspaceProvider | null; now?: () => number } = {},
+): Promise<Harness> {
   const claude = await new MockClaude().start();
   const github = await new MockGitHub().start();
   const cursor = await new MockCursor().start();
@@ -266,11 +270,17 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
   const store = await freshDb();
   const db = store.db;
   const emails: Email[] = [];
-  const sync = new SyncService(db, cfg, [], {
-    send: async (e) => {
-      emails.push(e);
+  const sync = new SyncService(
+    db,
+    cfg,
+    [],
+    {
+      send: async (e) => {
+        emails.push(e);
+      },
     },
-  });
+    { workspaceProvider: opts.workspaceProvider ?? null, now: opts.now },
+  );
   const server = createServer(createApp(db, cfg, sync));
   const url = await listen(server);
   cfg.publicUrl = url;
@@ -347,4 +357,38 @@ export function admin(base: string, method: string, path: string, body?: unknown
     headers: { authorization: "Bearer test-admin-token", "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+}
+
+/** An in-memory cloud for workspace tests. Tests move machines between states by hand. */
+export class FakeCloud implements WorkspaceProvider {
+  kind = "fake";
+  machines = new Map<string, { state: MachineState; spec: MachineSpec; template: Record<string, unknown> }>();
+  calls: string[] = [];
+  failCreate: string | null = null;
+  private n = 0;
+  async create(template: Record<string, unknown>, spec: MachineSpec) {
+    if (this.failCreate) throw new Error(this.failCreate);
+    const id = `i-fake${++this.n}`;
+    this.machines.set(id, { state: "starting", spec, template });
+    this.calls.push(`create ${id}`);
+    return id;
+  }
+  async start(id: string) {
+    this.calls.push(`start ${id}`);
+    this.machines.get(id)!.state = "starting";
+  }
+  async stop(id: string) {
+    this.calls.push(`stop ${id}`);
+    this.machines.get(id)!.state = "stopping";
+  }
+  async destroy(id: string) {
+    this.calls.push(`destroy ${id}`);
+    this.machines.get(id)!.state = "terminated";
+  }
+  async describe(ids: string[]) {
+    return new Map(ids.filter((i) => this.machines.has(i)).map((i) => [i, this.machines.get(i)!.state] as [string, MachineState]));
+  }
+  connectHint(id: string, name: string) {
+    return `Host devhub-${name}\n  HostName ${id}`;
+  }
 }

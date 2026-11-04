@@ -77,6 +77,8 @@ export interface Config {
     cursor?: CursorConnectorConfig;
   };
   syncIntervalSeconds: number;
+  /** Cloud workspaces. AWS credentials come from the default chain (IRSA, instance profile, env). */
+  workspaces?: { aws?: { region: string }; maxPerUser?: number };
   /** How often to recount merged PRs for the return-on-spend report (default 6). */
   outputRefreshHours?: number;
   /** Pause between GitHub search calls; search allows about 30 a minute (default 2100). */
@@ -140,6 +142,9 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     notify: { ...base.notify, ...fromFile.notify, ...overrides.notify },
   };
 
+  if (!cfg.workspaces?.aws && env.DEVHUB_WORKSPACES_AWS_REGION) {
+    cfg.workspaces = { ...cfg.workspaces, aws: { region: env.DEVHUB_WORKSPACES_AWS_REGION } };
+  }
   // Blank OIDC settings (e.g. the Helm chart's placeholders) mean "not configured".
   if (cfg.auth.oidc && (!cfg.auth.oidc.issuer || !cfg.auth.oidc.clientId)) delete cfg.auth.oidc;
   // Env vars fill in only what the file and explicit overrides left unset.

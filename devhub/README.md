@@ -25,6 +25,43 @@ Dev Hub doesn't rebuild any of that. It sits above the gateway and adds what the
 
 The same connector also works with the **Claude Enterprise Admin API** (`mode: "enterprise"`), which serves the same spend-limits API at `api.anthropic.com`.
 
+## Cloud workspaces
+
+Developers create cloud development machines from **Workspaces** in the portal. They run in the customer's own AWS account, from templates admins define under **Admin → Workspaces**.
+
+**What a workspace is**
+- An EC2 instance with no public IP, IMDSv2 required, an encrypted gp3 disk, and tags `managed-by=devhub`, `devhub:owner=<email>` and `devhub:workspace-id`.
+- On first boot it creates a `dev` user with the developer's SSH key and installs git, Node.js 22 and Claude Code. It also installs Dev Hub's [policy helper](#one-policy-for-every-tool), so Claude Code on the workspace follows the organization's policy.
+- Developers connect with SSH or VS Code Remote-SSH through **AWS Session Manager**: no inbound ports, no bastion. The page shows the `~/.ssh/config` block to use.
+
+**Lifecycle and cost**
+- Each template sets how long a workspace runs before Dev Hub **stops it automatically** (1–24 hours). A developer can add 2 hours at a time, up to 12 hours from now. A stopped workspace keeps its disk.
+- Running hours (at the template's price) plus disk storage (per GB-month, prorated) are charged to the developer's **budget wallet** as a `workspaces` tool, so compute counts against the same limit as AI spend. Nobody can create or start a workspace once their budget is used up.
+- Every sync reconciles with AWS: actual states are recorded and billing intervals opened or closed. A workspace deleted outside Dev Hub is marked deleted.
+- Deleting asks for confirmation and terminates the instance and its disk. Each person can have up to 3 workspaces (`workspaces.maxPerUser`).
+
+**Setup**
+1. Set `workspaces.aws.region` in the config file (or `DEVHUB_WORKSPACES_AWS_REGION`).
+2. Give Dev Hub's pod an AWS role through IRSA or EKS Pod Identity (Helm: `serviceAccount.annotations`). Dev Hub uses the default AWS credential chain and never stores AWS keys. A starting point for its policy (review it with your AWS admin):
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       { "Effect": "Allow", "Action": ["ec2:RunInstances"], "Resource": "*" },
+       { "Effect": "Allow", "Action": ["ec2:CreateTags"], "Resource": "*", "Condition": { "StringEquals": { "ec2:CreateAction": "RunInstances" } } },
+       { "Effect": "Allow", "Action": ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"], "Resource": "*",
+         "Condition": { "StringEquals": { "aws:ResourceTag/managed-by": "devhub" } } },
+       { "Effect": "Allow", "Action": ["ec2:DescribeInstances"], "Resource": "*" },
+       { "Effect": "Allow", "Action": ["iam:PassRole"], "Resource": "arn:aws:iam::<account>:role/devhub-workspace" }
+     ]
+   }
+   ```
+3. Create the workspace instance profile (`devhub-workspace`) with `AmazonSSMManagedInstanceCore`, a private subnet with outbound internet (NAT) for package installs, and a security group with no inbound rules.
+4. Pick an Ubuntu or Debian AMI with the SSM agent (Ubuntu's official AMIs have it). Set `DEVHUB_POLICY_TOKEN` so workspaces can fetch the Claude Code policy.
+5. Developers need the AWS CLI with its Session Manager plugin, and permission for `ssm:StartSession` on the `AWS-StartSSHSession` document. Limit it to their own instances, e.g. with a condition on `ssm:resourceTag/devhub:owner`.
+
+**Not yet:** GCP and Coder backends, idle detection (stopping is time-based), stopping running workspaces automatically when a budget runs out, and custom setup scripts per template.
+
 ## Return on spend
 
 **Admin → Return on spend** puts AI spend (every tool) next to merged pull requests, per team and per month:
@@ -104,7 +141,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 80 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 92 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
@@ -122,6 +159,7 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `GITHUB_ORG`, `GITHUB_TOKEN` | Copilot seats and premium-request overage. The overage report requires an org admin's token; seats need `manage_billing:copilot` or `read:org` |
 | `CURSOR_API_KEY` | Cursor team spend (Cursor Admin API key) |
 | `DEVHUB_ADMIN_TOKEN` | Bearer token for automation (onboarding scripts, Terraform) |
+| `DEVHUB_WORKSPACES_AWS_REGION` | Turns on cloud workspaces in this AWS region (see [Cloud workspaces](#cloud-workspaces)) |
 | `DEVHUB_POLICY_TOKEN` | Read-only token developers' machines use to fetch the Claude Code policy (see [One policy for every tool](#one-policy-for-every-tool)) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
 | `DEVHUB_SLACK_WEBHOOK_URL` | Slack notifications for requests, decisions and used-up budgets |
@@ -300,6 +338,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
 | **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
+| **Done (Phase 2a)** | Cloud workspaces on AWS EC2: templates, private machines via Session Manager, Claude Code with the org policy, auto-stop, compute in the budget wallet | Developers get governed machines in the customer's cloud |
 | **Done (Phase 1k)** | Return on spend: spend vs merged PRs by team and month, 6-month trend, Claude Code-marked PRs, CSV | Shows what the AI budget buys |
 | **Done (Phase 1j)** | One policy for every tool: Claude Code (live helper, static file, gateway block), Copilot content exclusions; team rules only tighten | Security teams set rules once |
 | **Done (Phase 1i)** | Keyless-signed images, SPDX SBOM attestation, SLSA provenance, deploy by digest | Customers can verify what they run |
@@ -307,7 +346,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |
-| Phase 2 | Workspaces in the customer's AWS/GCP (Coder as a backend, or a built-in EC2/GCE template) | |
+| Phase 2b | GCP and Coder workspace backends; idle detection | |
 | Phase 3 | Per-PR preview environments with TTL | |
 
 ## Connector notes

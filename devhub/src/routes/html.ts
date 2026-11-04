@@ -40,9 +40,13 @@ label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 td a{color:var(--accent)}
 `;
 
+/** Optional nav entries, switched on at startup when the feature is configured. */
+export const navOptions = { workspaces: false };
+
 export function page(title: string, p: Principal | undefined, body: string): string {
   const nav = p
     ? `<a href="/">My wallet</a>
+       ${navOptions.workspaces ? `<a href="/workspaces">Workspaces</a>` : ""}
        ${p.isAdmin || p.user?.role === "manager" ? `<a href="/approvals">Approvals</a>` : ""}
        ${p.isAdmin ? `<a href="/admin">Admin</a>` : ""}
        <form method="post" action="/auth/logout"><button class="ghost" type="submit">Sign out</button></form>`
@@ -67,6 +71,7 @@ const ADMIN_TABS: [string, string][] = [
   ["/admin/people", "People"],
   ["/admin/teams", "Teams"],
   ["/admin/roi", "Return on spend"],
+  ["/admin/workspaces", "Workspaces"],
   ["/admin/unmatched", "Unmatched spend"],
   ["/admin/policy", "Policy"],
   ["/admin/license", "License"],

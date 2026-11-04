@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import { BudgetAlerts } from "./alerts.js";
 import { emailSender, type EmailSender } from "./notify.js";
 import { OutputService } from "./output.js";
+import type { WorkspaceProvider } from "./providers/aws.js";
+import { WorkspacesConnector, WorkspaceService } from "./workspaces.js";
 import { audit, nowIso, type Db, type User } from "./db.js";
 import { currentPeriod, walletFor } from "./wallet.js";
 
@@ -22,13 +24,17 @@ export class SyncService {
   private running: Promise<SyncResult[]> | null = null;
   readonly alerts: BudgetAlerts;
   readonly output: OutputService;
+  readonly workspaces: WorkspaceService;
 
   constructor(
     private db: Db,
     private cfg: Config,
     extra: Connector[] = [],
     email: EmailSender = emailSender(cfg),
+    opts: { workspaceProvider?: WorkspaceProvider | null; now?: () => number } = {},
   ) {
+    this.workspaces = new WorkspaceService(db, cfg, opts.workspaceProvider, opts.now);
+    if (this.workspaces.enabled) this.connectors.push(new WorkspacesConnector(this.workspaces));
     this.alerts = new BudgetAlerts(db, cfg, email);
     this.output = new OutputService(db, cfg);
     if (cfg.connectors.claude) {
