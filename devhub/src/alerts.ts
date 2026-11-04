@@ -28,6 +28,14 @@ function levelsFor(cfg: Config, w: WalletStatus): Level[] {
   return w.spendCents / w.limitCents >= cfg.wallet.warnAt ? ["warning"] : [];
 }
 
+/** What happens to running workspaces; graceMinutes is null when budgets don't stop them. */
+function workspaceNote(graceMinutes: number | null): string {
+  if (graceMinutes === null) return "";
+  return graceMinutes > 0
+    ? ` Running workspaces stop in ${graceMinutes} minutes; save your work.`
+    : " Running workspaces are being stopped.";
+}
+
 function breakdown(w: WalletStatus): string {
   return Object.entries(w.spendByTool)
     .sort((a, b) => b[1] - a[1])
@@ -35,7 +43,7 @@ function breakdown(w: WalletStatus): string {
     .join("\n");
 }
 
-function personEmail(cfg: Config, u: User, w: WalletStatus, level: Level) {
+function personEmail(cfg: Config, u: User, w: WalletStatus, level: Level, graceMinutes: number | null) {
   const pct = Math.round((w.spendCents / w.limitCents) * 100);
   const month = monthName(w.period);
   const ask = `Need more? Ask for an increase in Dev Hub: ${cfg.publicUrl}/`;
@@ -64,7 +72,7 @@ function personEmail(cfg: Config, u: User, w: WalletStatus, level: Level) {
       "",
       breakdown(w),
       "",
-      `Claude requests are blocked until the budget resets on ${nextReset(w.period)} or an increase is approved.`,
+      `Claude requests are blocked until the budget resets on ${nextReset(w.period)} or an increase is approved.` + workspaceNote(graceMinutes),
       ask,
     ].join("\n"),
   };
@@ -75,6 +83,8 @@ export class BudgetAlerts {
     private db: Db,
     private cfg: Config,
     private email: EmailSender,
+    /** Minutes before running workspaces stop on a used-up budget, or null if they don't. */
+    private workspaceGraceMinutes: number | null = null,
   ) {}
 
   /** Check everyone (or the given people) and send any alerts that are due. Returns how many went out. */
@@ -106,7 +116,7 @@ export class BudgetAlerts {
       if (fresh.length === 0) continue;
       const level: Level = fresh.includes("exhausted") ? "exhausted" : "warning";
       try {
-        await this.email.send({ to: [u.email], ...personEmail(this.cfg, u, w, level) });
+        await this.email.send({ to: [u.email], ...personEmail(this.cfg, u, w, level, this.workspaceGraceMinutes) });
         if (level === "exhausted") await this.tellManagers(u, w);
         await audit(this.db, "system", `budget.alert.${level}`, { user: u.email, period, spendCents: w.spendCents, limitCents: w.limitCents });
         sent++;

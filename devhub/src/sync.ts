@@ -36,7 +36,8 @@ export class SyncService {
   ) {
     this.workspaces = new WorkspaceService(db, cfg, opts.workspaceProviders, opts.now);
     if (this.workspaces.enabled) this.connectors.push(new WorkspacesConnector(this.workspaces));
-    this.alerts = new BudgetAlerts(db, cfg, email);
+    const stopsOnBudget = this.workspaces.enabled && cfg.workspaces?.stopWhenBudgetUsedUp !== false;
+    this.alerts = new BudgetAlerts(db, cfg, email, stopsOnBudget ? this.workspaces.budgetGraceMinutes : null);
     this.output = new OutputService(db, cfg);
     if (cfg.connectors.claude) {
       this.claude = new ClaudeConnector(cfg.connectors.claude);
@@ -85,6 +86,15 @@ export class SyncService {
       if (n > 0) results.push({ connector: "budget-alerts", ok: true, message: `${n} sent` });
     } catch (e) {
       results.push({ connector: "budget-alerts", ok: false, message: (e as Error).message });
+    }
+    // After every spend pull, so a budget used up on any tool stops that person's workspaces.
+    try {
+      const r = await this.workspaces.enforceBudgets();
+      if (r.scheduled || r.stopped || r.cancelled) {
+        results.push({ connector: "workspace-budget-stops", ok: true, message: `${r.scheduled} scheduled, ${r.stopped} stopped, ${r.cancelled} cancelled` });
+      }
+    } catch (e) {
+      results.push({ connector: "workspace-budget-stops", ok: false, message: (e as Error).message });
     }
     for (const r of results) {
       await this.db.run("INSERT INTO sync_runs (ts, connector, ok, message) VALUES (?, ?, ?, ?)", nowIso(), r.connector, r.ok ? 1 : 0, r.message);
@@ -164,12 +174,14 @@ export class SyncService {
   }
 
   /**
-   * After a change to someone's budget, team, status or spend: push their Claude caps and
-   * send (or re-arm) budget alerts. Never throws; failures are logged.
+   * After a change to someone's budget, team, status or spend: push their Claude caps,
+   * send (or re-arm) budget alerts, and schedule or cancel workspace budget stops. Never throws;
+   * failures are logged.
    */
   async afterChange(userIds?: number[]): Promise<void> {
     await this.pushCaps(userIds).catch((e) => console.error("cap push failed:", e));
     await this.alerts.check(userIds).catch((e) => console.error("budget alerts failed:", e));
+    await this.workspaces.enforceBudgets(userIds).catch((e) => console.error("workspace budget stops failed:", e));
   }
 
   private readonly instanceId = randomUUID();

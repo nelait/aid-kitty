@@ -48,6 +48,8 @@ export interface Workspace {
   /** Last heartbeat from Dev Hub's agent, active or not. Null means the agent has never reported. */
   last_heartbeat_at: string | null;
   agent_token_hash: string | null;
+  /** Set when the owner's budget ran out while it was running: it stops at this time unless the budget is raised. */
+  budget_stop_at: string | null;
 }
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
@@ -167,7 +169,12 @@ export class WorkspaceService {
     private now: () => number = Date.now,
   ) {
     this.providers = new Map((providers ?? buildProviders(cfg)).map((p) => [p.kind, p]));
+    const grace = cfg.workspaces?.budgetGraceMinutes ?? 15;
+    if (!Number.isInteger(grace) || grace < 0 || grace > 240) throw new Error("workspaces.budgetGraceMinutes must be a whole number from 0 to 240");
+    this.budgetGraceMinutes = grace;
   }
+
+  readonly budgetGraceMinutes: number;
 
   get enabled() {
     return this.providers.size > 0;
@@ -370,7 +377,7 @@ export class WorkspaceService {
     const provider = this.need(ws.provider);
     await this.cloud("stop the workspace", () => provider.stop(ws.machine_id!));
     await this.db.tx(async (q) => {
-      await this.setState(q, ws, "stopping", { stop_at: null, detail });
+      await this.setState(q, ws, "stopping", { stop_at: null, budget_stop_at: null, detail });
       await this.closeRun(q, ws);
     });
     await audit(this.db, actor, reason, { id: ws.id });
@@ -378,6 +385,7 @@ export class WorkspaceService {
 
   async extend(ws: Workspace, actor: string, hours = 2) {
     if (ws.state !== "running" && ws.state !== "starting") throw new HttpError(409, "Only a running workspace can be kept running longer.");
+    if (ws.budget_stop_at) throw new HttpError(402, "Your AI budget for this month is used up, so this workspace will stop. Ask for an increase to keep it running.");
     const now = this.now();
     const base = Math.max(now, ws.stop_at ? Date.parse(ws.stop_at) : now);
     const until = Math.min(base + hours * 3_600_000, now + MAX_EXTEND_HOURS * 3_600_000);
@@ -454,6 +462,63 @@ export class WorkspaceService {
     return { checked: live.length, autoStopped };
   }
 
+  /**
+   * Stop running workspaces whose owner's AI budget is used up. Each gets budgetGraceMinutes'
+   * notice first (the agent warns logged-in users); if the budget is raised in the meantime,
+   * the stop is cancelled. Workspaces of people who were deactivated stop straight away.
+   * Workspace costs are counted live, not as of the last sync.
+   */
+  async enforceBudgets(onlyUserIds?: number[]): Promise<{ scheduled: number; stopped: number; cancelled: number }> {
+    const out = { scheduled: 0, stopped: 0, cancelled: 0 };
+    if (this.cfg.workspaces?.stopWhenBudgetUsedUp === false || !this.enabled) return out;
+    const running = (await this.db.all<Workspace>("SELECT * FROM workspaces WHERE state IN ('running', 'starting') AND machine_id IS NOT NULL")).filter(
+      (w) => this.providers.has(w.provider) && (!onlyUserIds || onlyUserIds.includes(w.user_id)),
+    );
+    if (!running.length) return out;
+    const costs = await this.monthlyCosts(this.currentPeriod());
+    const owners = new Map<number, { gone: boolean; usedUp: boolean }>();
+    for (const uid of new Set(running.map((w) => w.user_id))) {
+      const u = await this.db.get<User>("SELECT * FROM users WHERE id = ?", uid);
+      if (!u || u.status !== "active" || u.deleted_at) {
+        owners.set(uid, { gone: true, usedUp: true });
+        continue;
+      }
+      const w = await walletFor(this.db, this.cfg, u);
+      // Running time since the last sync isn't in the wallet yet.
+      const unsynced = Math.max(0, (costs.get(uid) ?? 0) - (w.spendByTool.workspaces ?? 0));
+      owners.set(uid, { gone: false, usedUp: w.remainingCents - unsynced <= 0 });
+    }
+
+    for (const ws of running) {
+      const o = owners.get(ws.user_id)!;
+      if (!o.usedUp) {
+        if (ws.budget_stop_at) {
+          await this.db.run("UPDATE workspaces SET budget_stop_at = NULL WHERE id = ?", ws.id);
+          await audit(this.db, "system", "workspace.budget_stop_cancelled", { id: ws.id });
+          out.cancelled++;
+        }
+        continue;
+      }
+      let at = ws.budget_stop_at;
+      if (!at && !o.gone) {
+        at = this.iso(this.now() + this.budgetGraceMinutes * 60_000);
+        await this.db.run("UPDATE workspaces SET budget_stop_at = ? WHERE id = ?", at, ws.id);
+        await audit(this.db, "system", "workspace.budget_stop_scheduled", { id: ws.id, at });
+        out.scheduled++;
+      }
+      if (o.gone || Date.parse(at!) <= this.now()) {
+        const detail = o.gone ? "Stopped because its owner no longer has access to Dev Hub." : "Stopped because the AI budget for this month is used up.";
+        try {
+          await this.stop(ws, "system", "workspace.budget_stopped", detail);
+          out.stopped++;
+        } catch (e) {
+          console.error(`budget stop of workspace ${ws.id} failed:`, (e as Error).message);
+        }
+      }
+    }
+    return out;
+  }
+
   /** When an idle workspace will be stopped, or null if idle stopping doesn't apply to it. */
   idleStopAt(w: Workspace): number | null {
     if (!w.idle_minutes || !w.last_active_at) return null;
@@ -498,8 +563,16 @@ export class WorkspaceService {
     );
     if (ws.state !== "running" && ws.state !== "starting") return "";
 
-    // Warn at 15, 5 and 1 minutes before a scheduled stop, and 5 and 1 minutes before an idle stop.
+    // Warn before a budget stop (when it's scheduled, then at 10, 5 and 1 minutes), at 15, 5 and 1
+    // minutes before a scheduled stop, and at 5 and 1 minutes before an idle stop.
     const minsLeft = (at: number) => Math.ceil((at - this.now()) / 60_000);
+    if (ws.budget_stop_at) {
+      const m = minsLeft(Date.parse(ws.budget_stop_at));
+      if (m > 0 && [this.budgetGraceMinutes, 10, 5, 1].includes(m)) {
+        return `Dev Hub: your AI budget for this month is used up, so this workspace stops in ${m} minute${m === 1 ? "" : "s"}. Save your work, or ask for an increase: ${this.cfg.publicUrl}/`;
+      }
+      return "";
+    }
     if (ws.stop_at) {
       const m = minsLeft(Date.parse(ws.stop_at));
       if ([15, 5, 1].includes(m)) {

@@ -78,6 +78,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
             ${w.stop_at && (w.state === "running" || w.state === "starting") ? `<br>Stops automatically at ${when(w.stop_at)}${w.idle_minutes ? `, or after ${w.idle_minutes} minutes without activity` : ""}.` : ""}
             ${w.last_active_at && (w.state === "running" || w.state === "starting") ? `<br>Last active ${when(w.last_active_at)}.` : ""}
             ${w.detail ? `<br>${esc(w.detail)}` : ""}</p>
+            ${w.budget_stop_at && (w.state === "running" || w.state === "starting") ? `<p class="flash" style="border-color:var(--bad)">Your AI budget for this month is used up, so this workspace stops at ${when(w.budget_stop_at)}. Save your work, or <a href="/">ask for an increase</a>.</p>` : ""}
             ${actions(p, w, "/workspaces")}
             ${hint ? `<details style="margin-top:10px"><summary>Connect with VS Code or SSH</summary><pre>${esc(hint)}</pre>
               <p class="muted">Then run <code>ssh devhub-${esc(w.name)}</code>, or in VS Code: Remote-SSH, Connect to Host, <code>devhub-${esc(w.name)}</code>. Claude Code is installed and uses your organization's policy.</p></details>` : ""}
@@ -302,7 +303,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
               all
                 .map(
                   (w) => `<tr><td>${esc(w.email)}</td><td>${esc(w.name)}<div class="muted"><code>${esc(w.machine_id ?? "")}</code></div></td><td>${esc(w.template)}</td>
-                  <td>${STATE_LABEL[w.state] ?? esc(w.state)}</td><td>${w.state === "running" || w.state === "starting" ? when(w.stop_at) : ""}</td>
+                  <td>${STATE_LABEL[w.state] ?? esc(w.state)}</td><td>${w.state === "running" || w.state === "starting" ? (w.budget_stop_at ? `<strong>Budget used up:</strong> ${when(w.budget_stop_at)}` : when(w.stop_at)) : ""}</td>
                   <td>${w.state === "running" || w.state === "starting" ? (w.last_active_at ? when(w.last_active_at) : w.idle_minutes ? `<span class="muted">no reports yet</span>` : "") : ""}</td>
                   <td class="n">${fmtUsd(costs.get(w.user_id) ?? 0)}</td><td>${actions(p, w, "/admin/workspaces", "admin")}</td></tr>`,
                 )

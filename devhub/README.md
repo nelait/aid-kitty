@@ -87,7 +87,16 @@ Set `DEVHUB_POLICY_TOKEN` so AWS and GCP workspaces can fetch the Claude Code po
 - Logged-in users get a terminal message 5 and 1 minutes before an idle stop, and 15, 5 and 1 minutes before a scheduled stop.
 - If a machine's agent has never reported (blocked network, custom image), Dev Hub doesn't idle-stop it; the scheduled stop still applies. The admin page shows "no reports yet" for those.
 
-**Not yet:** stopping running workspaces automatically when a budget runs out, and custom setup scripts per template.
+**Budget stop.** Workspaces are paid from the same budget as AI tools, so when someone's budget is used up (on any tool), their running workspaces stop too:
+
+- Dev Hub checks after every sync and whenever spend, a budget, a team or a person changes. A workspace's own running time counts immediately, not just from the next sync.
+- Each running workspace gets 15 minutes' notice (`workspaces.budgetGraceMinutes`, 0 to 240). The "used up" email says so, the agent shows a terminal message (when the stop is scheduled, then at 10, 5 and 1 minutes), and the Workspaces page shows when it will stop. "Keep running" is refused meanwhile.
+- If the budget is raised before then (an approved increase, a bigger team pool, an admin change), the stop is cancelled.
+- Stopped workspaces can't be started until there's budget again. Disks are kept, so nothing is lost; disk storage keeps counting at its (small) monthly rate.
+- When someone is deactivated (in Okta or by an admin), their workspaces stop straight away.
+- Turn it off with `workspaces.stopWhenBudgetUsedUp: false`; workspaces then only stop on their schedule or when idle.
+
+**Not yet:** custom setup scripts per template.
 
 ## Return on spend
 
@@ -377,7 +386,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | P1 | AWS/GCP Marketplace listings | Distribution |
 | **Done (Phase 2b)** | Google Compute Engine and Coder workspace backends alongside AWS | Workspaces wherever the customer runs |
 | **Done (Phase 2c)** | Idle detection: stop workspaces nobody is using (agent on AWS/GCP, Coder's own activity), with terminal warnings | Idle machines stop costing money in 30 minutes, not 8 hours |
-| P1 | Stop running workspaces when a budget runs out | |
+| **Done (Phase 2d)** | Stop running workspaces when a budget runs out (with a grace period and warnings) or their owner is deactivated | Workspace spend can't run past the budget |
 | Phase 3 | Per-PR preview environments with TTL | |
 
 ## Connector notes

@@ -87,6 +87,13 @@ export interface Config {
     gcp?: { project: string };
     coder?: { url: string; token: string };
     maxPerUser?: number;
+    /**
+     * Stop someone's running workspaces when their AI budget is used up (default true), after
+     * budgetGraceMinutes (default 15) so they can save their work. An approved increase in the
+     * meantime cancels the stop.
+     */
+    stopWhenBudgetUsedUp?: boolean;
+    budgetGraceMinutes?: number;
   };
   /** How often to recount merged PRs for the return-on-spend report (default 6). */
   outputRefreshHours?: number;

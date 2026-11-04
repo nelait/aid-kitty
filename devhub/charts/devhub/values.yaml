@@ -56,6 +56,7 @@ secrets:
   #   SMTP_URL (budget alert emails), DEVHUB_EMAIL_FROM, DEVHUB_POLICY_TOKEN (policy helper),
   #   CODER_SESSION_TOKEN (Coder workspaces)
   # Workspace backends go under config.workspaces: { aws: { region }, gcp: { project }, coder: { url } }.
+  # Also under config.workspaces: maxPerUser (3), stopWhenBudgetUsedUp (true), budgetGraceMinutes (15).
 
 service:
   type: ClusterIP
