@@ -176,7 +176,7 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
   }
 
   const afterStatusChange = async (userId: number) => {
-    await sync.pushCaps([userId]).catch((e) => console.error("cap push after SCIM change failed:", e));
+    await sync.afterChange([userId]);
   };
 
   // ---------- discovery ----------
@@ -349,7 +349,7 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
   // A team change can move someone into or out of a team pool; re-check caps for everyone affected.
   const pushTeamCaps = async (teamId: number, extra: string[] = []) => {
     const ids = [...(await memberIdsOf(teamId)), ...extra].map(Number);
-    await sync.pushCaps([...new Set(ids)]).catch((e) => console.error("cap push after SCIM group change failed:", e));
+    await sync.afterChange([...new Set(ids)]);
   };
 
   r.get(
@@ -464,7 +464,7 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
         await q.run("DELETE FROM teams WHERE id = ?", t.id);
         await audit(q, "scim", "scim.group.deleted", { id: t.id, name: t.name, members: members.length });
       });
-      await sync.pushCaps(members).catch((e) => console.error("cap push after SCIM group delete failed:", e));
+      await sync.afterChange(members);
       res.status(204).end();
     }),
   );

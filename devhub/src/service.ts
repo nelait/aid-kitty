@@ -1,4 +1,5 @@
 import type { Config } from "./config.js";
+import { slack } from "./notify.js";
 import { audit, getUser, insertId, nowIso, type Db, type Queryable, type RaiseRequest, type User } from "./db.js";
 import type { Principal } from "./auth.js";
 import type { SyncService } from "./sync.js";
@@ -13,16 +14,7 @@ export class HttpError extends Error {
   }
 }
 
-export function notify(cfg: Config, text: string): void {
-  const url = cfg.notify.slackWebhookUrl;
-  if (!url) return;
-  fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
-    signal: AbortSignal.timeout(10_000),
-  }).catch((e) => console.error("slack notify failed:", (e as Error).message));
-}
+export const notify = slack;
 
 export async function createRaiseRequest(db: Db, cfg: Config, user: User, amountUsd: number, reason: string): Promise<RaiseRequest> {
   if (!Number.isFinite(amountUsd) || amountUsd <= 0 || amountUsd > 100_000) {
@@ -109,7 +101,7 @@ export async function decideRaiseRequest(
   );
   // An approval raises the Claude cap right away instead of waiting for the next sync.
   if (approve && req.period === currentPeriod()) {
-    await sync.pushCaps([req.user_id]).catch((e) => console.error("cap push after approval failed:", e));
+    await sync.afterChange([req.user_id]);
   }
   return decided;
 }

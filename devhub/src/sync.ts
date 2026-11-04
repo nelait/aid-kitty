@@ -4,6 +4,8 @@ import { CopilotConnector } from "./connectors/copilot.js";
 import { CursorConnector } from "./connectors/cursor.js";
 import type { Connector } from "./connectors/types.js";
 import { randomUUID } from "node:crypto";
+import { BudgetAlerts } from "./alerts.js";
+import { emailSender, type EmailSender } from "./notify.js";
 import { audit, nowIso, type Db, type User } from "./db.js";
 import { currentPeriod, walletFor } from "./wallet.js";
 
@@ -17,12 +19,15 @@ export class SyncService {
   readonly connectors: Connector[] = [];
   readonly claude?: ClaudeConnector;
   private running: Promise<SyncResult[]> | null = null;
+  readonly alerts: BudgetAlerts;
 
   constructor(
     private db: Db,
     private cfg: Config,
     extra: Connector[] = [],
+    email: EmailSender = emailSender(cfg),
   ) {
+    this.alerts = new BudgetAlerts(db, cfg, email);
     if (cfg.connectors.claude) {
       this.claude = new ClaudeConnector(cfg.connectors.claude);
       this.connectors.push(this.claude);
@@ -64,6 +69,12 @@ export class SyncService {
       } else {
         results.push({ connector: "claude-caps", ok: false, message: "skipped: a spend pull failed" });
       }
+    }
+    try {
+      const n = await this.alerts.check();
+      if (n > 0) results.push({ connector: "budget-alerts", ok: true, message: `${n} sent` });
+    } catch (e) {
+      results.push({ connector: "budget-alerts", ok: false, message: (e as Error).message });
     }
     for (const r of results) {
       await this.db.run("INSERT INTO sync_runs (ts, connector, ok, message) VALUES (?, ?, ?, ?)", nowIso(), r.connector, r.ok ? 1 : 0, r.message);
@@ -140,6 +151,15 @@ export class SyncService {
       changed++;
     }
     return changed;
+  }
+
+  /**
+   * After a change to someone's budget, team, status or spend: push their Claude caps and
+   * send (or re-arm) budget alerts. Never throws; failures are logged.
+   */
+  async afterChange(userIds?: number[]): Promise<void> {
+    await this.pushCaps(userIds).catch((e) => console.error("cap push failed:", e));
+    await this.alerts.check(userIds).catch((e) => console.error("budget alerts failed:", e));
   }
 
   private readonly instanceId = randomUUID();

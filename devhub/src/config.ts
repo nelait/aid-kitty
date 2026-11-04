@@ -75,7 +75,14 @@ export interface Config {
     cursor?: CursorConnectorConfig;
   };
   syncIntervalSeconds: number;
-  notify: { slackWebhookUrl?: string };
+  notify: {
+    slackWebhookUrl?: string;
+    /** smtp://user:pass@host:587 or smtps://user:pass@host:465. Without it, emails are only logged. */
+    smtpUrl?: string;
+    emailFrom?: string;
+    /** Email people at warnAt and 100% of their budget (default true). */
+    budgetAlerts?: boolean;
+  };
 }
 
 const env = process.env;
@@ -108,7 +115,12 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     wallet: { defaultMonthlyBudgetUsd: 300, warnAt: 0.8 },
     connectors: {},
     syncIntervalSeconds: 300,
-    notify: { slackWebhookUrl: env.DEVHUB_SLACK_WEBHOOK_URL },
+    notify: {
+      slackWebhookUrl: env.DEVHUB_SLACK_WEBHOOK_URL,
+      smtpUrl: env.SMTP_URL || undefined,
+      emailFrom: env.DEVHUB_EMAIL_FROM || undefined,
+      budgetAlerts: true,
+    },
   };
 
   const cfg: Config = {

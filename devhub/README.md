@@ -25,6 +25,19 @@ Dev Hub doesn't rebuild any of that. It sits above the gateway and adds what the
 
 The same connector also works with the **Claude Enterprise Admin API** (`mode: "enterprise"`), which serves the same spend-limits API at `api.anthropic.com`.
 
+## Budget alerts
+
+After every sync (and whenever an admin changes a budget, team or spend), Dev Hub checks each active person's whole budget across all tools:
+
+| When | Who hears about it |
+| --- | --- |
+| Spend passes `wallet.warnAt` (default 80%) | The person, by email: what they've spent per tool, what's left, when it resets, and where to ask for more |
+| The budget is used up (personal limit or team pool) | The person, the managers of their team (with a link to approvals), and Slack if a webhook is set |
+
+Each alert goes out once per person per month. If an approved increase brings someone back under a level, that level re-arms. Someone who jumps straight past 100% gets one email, not two. If sending fails, the next check retries. Set `notify.budgetAlerts: false` to turn alerts off.
+
+Claude Code also shows its own warnings at 75% and 95% of the Claude cap. Dev Hub's alerts cover the whole budget across every tool.
+
 ## How it works
 
 ```
@@ -49,7 +62,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 54 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 62 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
@@ -68,7 +81,8 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `CURSOR_API_KEY` | Cursor team spend (Cursor Admin API key) |
 | `DEVHUB_ADMIN_TOKEN` | Bearer token for automation (onboarding scripts, Terraform) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
-| `DEVHUB_SLACK_WEBHOOK_URL` | Notifications for requests and decisions |
+| `DEVHUB_SLACK_WEBHOOK_URL` | Slack notifications for requests, decisions and used-up budgets |
+| `SMTP_URL`, `DEVHUB_EMAIL_FROM` | Email for budget alerts, e.g. `smtps://user:pass@smtp.acme.io:465` and `Dev Hub <devhub@acme.io>`. Without `SMTP_URL`, emails are only logged |
 | `DEVHUB_LICENSE` or `DEVHUB_LICENSE_FILE` | Signed license (contents or path). Admins can also install one with `PUT /api/admin/license` |
 | `DEVHUB_DEV_LOGIN=true` | Email-only login for local development. **Never in production.** |
 
@@ -220,6 +234,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
 | **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
+| **Done (Phase 1h)** | Budget alerts by email at 80% and 100%; managers told when someone runs out | People hear before they're blocked |
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |

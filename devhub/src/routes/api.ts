@@ -155,7 +155,7 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
         }
         await audit(q, req.principal!.label, "spend.imported", { period, tool, rows: rows.length, missing });
       });
-      await sync.pushCaps().catch((e) => console.error("cap push failed:", e));
+      await sync.afterChange();
       res.json({ imported: rows.length - missing.length, unknown_emails: missing });
     }),
   );

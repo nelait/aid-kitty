@@ -116,7 +116,7 @@ export async function upsertUsers(
     return out;
   });
   // A role, status, team or budget change moves caps; push them now.
-  await sync.pushCaps(saved.map((u) => u.id)).catch((e) => console.error("cap push failed:", e));
+  await sync.afterChange(saved.map((u) => u.id));
   return saved;
 }
 
@@ -154,7 +154,7 @@ export async function saveTeam(db: Db, sync: SyncService, id: number | null, b: 
   await audit(db, actor, "team.saved", { id, ...b });
   // Team budgets feed every member's wallet: re-check their caps.
   const members = (await db.all<{ id: number }>("SELECT id FROM users WHERE team_id = ?", id)).map((m) => m.id);
-  if (members.length) await sync.pushCaps(members).catch((e) => console.error("cap push failed:", e));
+  if (members.length) await sync.afterChange(members);
   return db.get("SELECT * FROM teams WHERE id = ?", id);
 }
 

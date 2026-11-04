@@ -146,6 +146,13 @@ CREATE TABLE IF NOT EXISTS web_sessions (
   csrf TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS budget_alerts (
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  period TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('warning','exhausted')),
+  sent_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, period, level)
+);
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,

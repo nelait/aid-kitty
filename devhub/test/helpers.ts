@@ -6,6 +6,7 @@ import { loadConfig, type Config } from "../src/config.js";
 import pg from "pg";
 import { openDb, type Db } from "../src/db.js";
 import { issueLicense, setLicensePublicKeyForTests } from "../src/license.js";
+import type { Email } from "../src/notify.js";
 import { SyncService } from "../src/sync.js";
 
 // A throwaway signing key, so tests exercise real signature checks.
@@ -202,6 +203,8 @@ export interface Harness {
   claude: MockClaude;
   github: MockGitHub;
   cursor: MockCursor;
+  /** Emails Dev Hub would have sent, in order. */
+  emails: Email[];
   close(): Promise<void>;
 }
 
@@ -224,7 +227,12 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
   });
   const store = await freshDb();
   const db = store.db;
-  const sync = new SyncService(db, cfg);
+  const emails: Email[] = [];
+  const sync = new SyncService(db, cfg, [], {
+    send: async (e) => {
+      emails.push(e);
+    },
+  });
   const server = createServer(createApp(db, cfg, sync));
   const url = await listen(server);
   cfg.publicUrl = url;
@@ -236,6 +244,7 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     claude,
     github,
     cursor,
+    emails,
     async close() {
       server.closeAllConnections();
       server.close();
