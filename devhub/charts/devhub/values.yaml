@@ -54,9 +54,11 @@ secrets:
   #   DATABASE_URL (with database.type=postgres), OIDC_CLIENT_SECRET, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY,
   #   DEVHUB_ADMIN_TOKEN, DEVHUB_SCIM_TOKEN, DEVHUB_SLACK_WEBHOOK_URL, DEVHUB_LICENSE,
   #   SMTP_URL (budget alert emails), DEVHUB_EMAIL_FROM, DEVHUB_POLICY_TOKEN (policy helper),
-  #   CODER_SESSION_TOKEN (Coder workspaces)
+  #   CODER_SESSION_TOKEN (Coder workspaces), DEVHUB_PREVIEW_WEBHOOK_SECRET (GitHub webhook for PR previews)
   # Workspace backends go under config.workspaces: { aws: { region }, gcp: { project }, coder: { url } }.
   # Also under config.workspaces: maxPerUser (3), stopWhenBudgetUsedUp (true), budgetGraceMinutes (15).
+  # PR previews: config.previews: { domain: preview.devhub.example.com, maxActive: 20, comment: true },
+  # plus ingress.previewHost below. They need GITHUB_TOKEN and an AWS or GCP workspace backend.
 
 service:
   type: ClusterIP
@@ -67,9 +69,13 @@ ingress:
   className: ""
   annotations: {}
   host: devhub.example.com
+  # For PR previews: the wildcard for config.previews.domain, e.g. "*.preview.devhub.example.com".
+  previewHost: ""
   tls:
     enabled: true
     secretName: devhub-tls
+    # A wildcard certificate for previewHost; defaults to secretName (which must then cover it).
+    previewSecretName: ""
 
 resources:
   requests: { cpu: 50m, memory: 128Mi }

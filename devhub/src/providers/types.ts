@@ -27,4 +27,9 @@ export interface WorkspaceProvider {
    * Only for backends that track activity themselves (Coder); others report through Dev Hub's agent.
    */
   lastActiveAt?(machineId: string): string | undefined;
+  /**
+   * The machine's private IP, from the latest describe(), for proxying preview environments.
+   * Only backends whose machines Dev Hub can reach directly (AWS, GCP) have it.
+   */
+  privateAddress?(machineId: string): string | undefined;
 }

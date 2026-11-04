@@ -9,6 +9,8 @@ import { roiPortalRoutes } from "./routes/roi-portal.js";
 import { navOptions } from "./routes/html.js";
 import { workspacesPortalRoutes } from "./routes/workspaces-portal.js";
 import { portalRoutes } from "./routes/portal.js";
+import { previewProxy, previewRoutes, previewUpgrade } from "./routes/previews.js";
+import type { Server } from "node:http";
 import { scimRoutes } from "./routes/scim.js";
 import type { SyncService } from "./sync.js";
 
@@ -16,6 +18,8 @@ export function createApp(db: Db, cfg: Config, sync: SyncService) {
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", "loopback");
+  // Preview hosts (pr-1-repo.<previews.domain>) go straight to their proxy, before Dev Hub's own headers.
+  if (cfg.previews) app.use(previewProxy(sync.previews, cfg));
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -27,12 +31,18 @@ export function createApp(db: Db, cfg: Config, sync: SyncService) {
   app.use(identify(db, cfg));
   app.use(authRoutes(db, cfg));
   app.use("/scim/v2", scimRoutes(db, cfg, sync));
+  app.use(previewRoutes(sync.previews, cfg));
   app.use("/api", apiRoutes(db, cfg, sync));
   app.use(adminPortalRoutes(db, cfg, sync));
   app.use(policyPortalRoutes(db, cfg));
   app.use(roiPortalRoutes(db, sync));
-  app.use(workspacesPortalRoutes(db, sync.workspaces));
+  app.use(workspacesPortalRoutes(db, sync.workspaces, sync.previews));
   navOptions.workspaces = sync.workspaces.enabled;
   app.use(portalRoutes(db, cfg, sync));
   return app;
+}
+
+/** Lets preview apps use WebSockets (e.g. a dev server's live reload) through Dev Hub. */
+export function attachUpgrades(server: Server, cfg: Config, sync: SyncService) {
+  if (cfg.previews) server.on("upgrade", previewUpgrade(sync.previews, cfg));
 }

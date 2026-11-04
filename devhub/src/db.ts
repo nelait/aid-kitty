@@ -186,9 +186,45 @@ CREATE TABLE IF NOT EXISTS workspaces (
   last_heartbeat_at TEXT,
   agent_token_hash TEXT,
   budget_stop_at TEXT,
-  setup_status TEXT
+  setup_status TEXT,
+  kind TEXT NOT NULL DEFAULT 'dev',
+  private_ip TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS workspaces_agent_token ON workspaces (agent_token_hash);
+CREATE TABLE IF NOT EXISTS preview_repos (
+  id ${pk},
+  repo TEXT NOT NULL UNIQUE,
+  template_id INTEGER NOT NULL REFERENCES workspace_templates(id),
+  port INTEGER NOT NULL,
+  build_command TEXT NOT NULL DEFAULT '',
+  start_command TEXT NOT NULL,
+  ttl_hours INTEGER NOT NULL DEFAULT 72,
+  label TEXT NOT NULL DEFAULT '',
+  allow_forks INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS previews (
+  id ${pk},
+  repo_id INTEGER NOT NULL REFERENCES preview_repos(id),
+  pr_number INTEGER NOT NULL,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL DEFAULT '',
+  author_login TEXT NOT NULL DEFAULT '',
+  user_id INTEGER REFERENCES users(id),
+  head_sha TEXT NOT NULL,
+  workspace_id INTEGER REFERENCES workspaces(id),
+  state TEXT NOT NULL,
+  reason TEXT,
+  deploy_sha TEXT,
+  deploy_status TEXT,
+  deploy_log TEXT,
+  comment_id TEXT,
+  comment_hash TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (repo_id, pr_number)
+);
 CREATE TABLE IF NOT EXISTS workspace_runs (
   id ${pk},
   workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
@@ -308,6 +344,8 @@ async function openSqlite(path: string): Promise<Db> {
   addColumn("workspaces", "budget_stop_at", "TEXT");
   addColumn("workspaces", "setup_status", "TEXT");
   addColumn("workspace_templates", "setup_script", "TEXT NOT NULL DEFAULT ''");
+  addColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'dev'");
+  addColumn("workspaces", "private_ip", "TEXT");
   s.exec(schema("sqlite"));
   // Earlier versions matched emails and GitHub logins case-insensitively in SQL; now the
   // app stores them lowercase so the same queries work on Postgres.
@@ -392,6 +430,8 @@ async function openPostgres(url: string): Promise<Db> {
     await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS budget_stop_at TEXT");
     await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS setup_status TEXT");
     await q.run("ALTER TABLE workspace_templates ADD COLUMN IF NOT EXISTS setup_script TEXT NOT NULL DEFAULT ''");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'dev'");
+    await q.run("ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS private_ip TEXT");
   });
   return db;
 }

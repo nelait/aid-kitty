@@ -129,6 +129,12 @@ export class AwsProvider implements WorkspaceProvider {
     await this.ec2.send(new TerminateInstancesCommand({ InstanceIds: [id] }));
   }
 
+  private addresses = new Map<string, string>();
+
+  privateAddress(id: string): string | undefined {
+    return this.addresses.get(id);
+  }
+
   async describe(ids: string[]): Promise<Map<string, MachineState>> {
     const out = new Map<string, MachineState>();
     for (let i = 0; i < ids.length; i += 100) {
@@ -138,6 +144,7 @@ export class AwsProvider implements WorkspaceProvider {
         for (const r of res.Reservations ?? []) {
           for (const inst of r.Instances ?? []) {
             if (inst.InstanceId) out.set(inst.InstanceId, STATE[inst.State?.Name ?? ""] ?? "starting");
+            if (inst.InstanceId && inst.PrivateIpAddress) this.addresses.set(inst.InstanceId, inst.PrivateIpAddress);
           }
         }
       } catch (e) {

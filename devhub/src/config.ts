@@ -95,6 +95,21 @@ export interface Config {
     stopWhenBudgetUsedUp?: boolean;
     budgetGraceMinutes?: number;
   };
+  /**
+   * Per-PR preview environments. Needs a wildcard DNS name (*.domain) and TLS certificate
+   * pointing at Dev Hub, a GitHub token (GITHUB_TOKEN) that can read the repos and comment on
+   * pull requests, and AWS or GCP workspaces Dev Hub can reach on their private IPs.
+   */
+  previews?: {
+    /** e.g. preview.devhub.acme.io: previews are served at pr-123-repo.preview.devhub.acme.io. */
+    domain: string;
+    /** Secret for GitHub's webhook signature (DEVHUB_PREVIEW_WEBHOOK_SECRET). Without it, previews update on each sync. */
+    webhookSecret?: string;
+    /** Most previews running at once, across all repos (default 20). */
+    maxActive?: number;
+    /** Post a comment on each PR with the preview's link and status (default true). */
+    comment?: boolean;
+  };
   /** How often to recount merged PRs for the return-on-spend report (default 6). */
   outputRefreshHours?: number;
   /** Pause between GitHub search calls; search allows about 30 a minute (default 2100). */
@@ -166,6 +181,12 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   }
   if (!cfg.workspaces?.coder && env.DEVHUB_WORKSPACES_CODER_URL) {
     cfg.workspaces = { ...cfg.workspaces, coder: { url: env.DEVHUB_WORKSPACES_CODER_URL, token: env.CODER_SESSION_TOKEN ?? "" } };
+  }
+  if (!cfg.previews && env.DEVHUB_PREVIEW_DOMAIN) cfg.previews = { domain: env.DEVHUB_PREVIEW_DOMAIN };
+  if (cfg.previews) {
+    cfg.previews.domain = cfg.previews.domain.trim().toLowerCase().replace(/^\*\./, "");
+    if (!/^([a-z0-9-]+\.)+[a-z0-9-]+$/.test(cfg.previews.domain)) throw new Error(`previews.domain must be a DNS name, got "${cfg.previews.domain}"`);
+    cfg.previews.webhookSecret ??= env.DEVHUB_PREVIEW_WEBHOOK_SECRET;
   }
   // Coder's token is a secret: allow it from env even when the URL is in the config file.
   if (cfg.workspaces?.coder && !cfg.workspaces.coder.token) cfg.workspaces.coder.token = env.CODER_SESSION_TOKEN ?? "";

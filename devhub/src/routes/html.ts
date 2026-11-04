@@ -72,6 +72,7 @@ const ADMIN_TABS: [string, string][] = [
   ["/admin/teams", "Teams"],
   ["/admin/roi", "Return on spend"],
   ["/admin/workspaces", "Workspaces"],
+  ["/admin/previews", "Previews"],
   ["/admin/unmatched", "Unmatched spend"],
   ["/admin/policy", "Policy"],
   ["/admin/license", "License"],

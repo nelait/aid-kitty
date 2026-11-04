@@ -54,6 +54,10 @@ export interface Workspace {
   budget_stop_at: string | null;
   /** The template setup script's progress, as reported by the agent: "running", "ok" or "failed <exit code>". */
   setup_status: string | null;
+  /** "dev" for a developer's workspace, "preview" for a pull request's preview environment. */
+  kind: "dev" | "preview";
+  /** Private IP from the backend, for proxying previews. */
+  private_ip: string | null;
 }
 
 const NAME_RE = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
@@ -102,10 +106,18 @@ export function validateSetupScript(raw: unknown): string {
 }
 
 /** Single-quotes a value for sh. */
-const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+export const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+
+/** A quoted heredoc writing `content` to `path`, with a terminator the content can't contain. */
+export function heredoc(path: string, content: string, base: string): string {
+  let end = base;
+  while (content.split("\n").includes(end)) end += "_";
+  const body = content.endsWith("\n") ? content : `${content}\n`;
+  return `cat > ${path} <<'${end}'\n${body}${end}`;
+}
 
 /** The template's own script, run once after Dev Hub's setup. Its result goes in a status file the agent reports. */
-function templateSetup(script: string, user: User, workspaceName: string): string {
+export function templateSetup(script: string, user: User, workspaceName: string): string {
   if (!script) return "";
   // A terminator the script can't contain, so any script text is safe inside the heredoc.
   let end = "DEVHUB_TEMPLATE_SETUP";
@@ -330,7 +342,7 @@ export class WorkspaceService {
   }
 
   listFor(userId: number) {
-    return this.db.all<Workspace>("SELECT * FROM workspaces WHERE user_id = ? AND state != 'terminated' ORDER BY created_at", userId);
+    return this.db.all<Workspace>("SELECT * FROM workspaces WHERE user_id = ? AND kind = 'dev' AND state != 'terminated' ORDER BY created_at", userId);
   }
 
   listAll() {
@@ -369,19 +381,32 @@ export class WorkspaceService {
     return q.run(`UPDATE workspaces SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`, ...sets.map(([, v]) => v), ws.id);
   }
 
-  async create(user: User, templateId: number, name: string): Promise<Workspace> {
+  /**
+   * A developer's workspace, or (with `preview`) a pull request's preview machine. Previews skip
+   * the SSH key and per-person limit, don't idle-stop or follow the template's schedule (the
+   * preview's own expiry applies), and boot with the preview script instead of the dev setup.
+   */
+  async create(
+    user: User,
+    templateId: number,
+    name: string,
+    preview?: { userData: (agentToken: string, t: WorkspaceTemplate) => string },
+  ): Promise<Workspace> {
     name = name.trim().toLowerCase();
     if (!NAME_RE.test(name)) throw new HttpError(400, "Name: 3-32 lowercase letters, digits or dashes, starting with a letter");
-    const t = await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ? AND enabled = 1", templateId);
+    const t = await this.db.get<WorkspaceTemplate>("SELECT * FROM workspace_templates WHERE id = ?" + (preview ? "" : " AND enabled = 1"), templateId);
     if (!t) throw new HttpError(400, "Choose an available template.");
     const provider = this.need(t.provider);
+    if (preview && !provider.usesSetupScript) throw new HttpError(400, "Previews need an AWS or GCP template.");
     // Dev Hub's setup script installs the developer's key; Coder templates handle access themselves.
     const sshKey = await this.db.get<{ k: string | null }>("SELECT ssh_public_key AS k FROM users WHERE id = ?", user.id);
-    if (provider.usesSetupScript && !sshKey?.k) throw new HttpError(400, "Add your SSH public key first, so you can connect to the workspace.");
-    const mine = await this.listFor(user.id);
-    const max = this.cfg.workspaces?.maxPerUser ?? 3;
-    if (mine.length >= max) throw new HttpError(409, `You can have up to ${max} workspaces. Delete one first.`);
-    if (mine.some((w) => w.name === name)) throw new HttpError(409, `You already have a workspace named ${name}.`);
+    if (!preview) {
+      if (provider.usesSetupScript && !sshKey?.k) throw new HttpError(400, "Add your SSH public key first, so you can connect to the workspace.");
+      const mine = await this.listFor(user.id);
+      const max = this.cfg.workspaces?.maxPerUser ?? 3;
+      if (mine.length >= max) throw new HttpError(409, `You can have up to ${max} workspaces. Delete one first.`);
+      if (mine.some((w) => w.name === name)) throw new HttpError(409, `You already have a workspace named ${name}.`);
+    }
     await this.budgetCheck(user);
 
     const disk = Number(JSON.parse(t.config).diskGb ?? 0);
@@ -389,7 +414,7 @@ export class WorkspaceService {
     const agentToken = provider.usesSetupScript ? randomBytes(32).toString("base64url") : null;
     const id = await insertId(
       this.db,
-      "INSERT INTO workspaces (user_id, template_id, name, provider, state, disk_gb, hourly_usd_e4, storage_gb_month_cents, created_at, idle_minutes, agent_token_hash) VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO workspaces (user_id, template_id, name, provider, state, disk_gb, hourly_usd_e4, storage_gb_month_cents, created_at, idle_minutes, agent_token_hash, kind) VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?)",
       user.id,
       t.id,
       name,
@@ -398,17 +423,20 @@ export class WorkspaceService {
       t.hourly_usd_e4,
       t.storage_gb_month_cents,
       this.iso(),
-      t.idle_minutes,
+      preview ? 0 : t.idle_minutes,
       agentToken ? sha256(agentToken) : null,
+      preview ? "preview" : "dev",
     );
     let ws = await this.get(id);
     try {
-      const setup = provider.usesSetupScript
-        ? userData(this.cfg, user, sshKey!.k!, agentToken!, { script: t.setup_script ?? "", workspaceName: name })
-        : "";
+      const setup = preview
+        ? preview.userData(agentToken!, t)
+        : provider.usesSetupScript
+          ? userData(this.cfg, user, sshKey!.k!, agentToken!, { script: t.setup_script ?? "", workspaceName: name })
+          : "";
       const machineId = await provider.create(JSON.parse(t.config), { workspaceId: id, name, ownerEmail: user.email, userData: setup });
       await this.db.tx(async (q) => {
-        await this.setState(q, ws, "starting", { machine_id: machineId, stop_at: this.iso(this.now() + t.stop_after_hours * 3_600_000), detail: null });
+        await this.setState(q, ws, "starting", { machine_id: machineId, stop_at: preview ? null : this.iso(this.now() + t.stop_after_hours * 3_600_000), detail: null });
         await this.openRun(q, ws);
       });
     } catch (e) {
@@ -416,7 +444,7 @@ export class WorkspaceService {
       await audit(this.db, user.email, "workspace.create_failed", { id, error: (e as Error).message });
       throw new HttpError(502, `The cloud provider refused to create the workspace: ${(e as Error).message}`);
     }
-    await audit(this.db, user.email, "workspace.created", { id, name, template: t.name });
+    await audit(this.db, preview ? "system" : user.email, preview ? "preview.machine_created" : "workspace.created", { id, name, template: t.name, owner: user.email });
     ws = await this.get(id);
     return ws;
   }
@@ -428,7 +456,7 @@ export class WorkspaceService {
     const provider = this.need(ws.provider);
     await this.cloud("start the workspace", () => provider.start(ws.machine_id!));
     await this.db.tx(async (q) => {
-      await this.setState(q, ws, "starting", { stop_at: this.iso(this.now() + (t?.stop_after_hours ?? 8) * 3_600_000), detail: null });
+      await this.setState(q, ws, "starting", { stop_at: ws.kind === "preview" ? null : this.iso(this.now() + (t?.stop_after_hours ?? 8) * 3_600_000), detail: null });
       await this.openRun(q, ws);
     });
     await audit(this.db, actor, "workspace.started", { id: ws.id });
@@ -497,6 +525,9 @@ export class WorkspaceService {
         else if (actual === "stopped" || actual === "terminated") await this.closeRun(q, ws);
       });
       if (actual !== "running") continue;
+
+      const ip = this.providers.get(ws.provider)!.privateAddress?.(ws.machine_id!);
+      if (ip && ip !== ws.private_ip) await this.db.run("UPDATE workspaces SET private_ip = ? WHERE id = ?", ip, ws.id);
 
       // Backends that track activity themselves (Coder) feed the same idle clock.
       let cur = await this.get(ws.id);
@@ -603,13 +634,19 @@ export class WorkspaceService {
    * A heartbeat from a workspace's activity agent. Open SSH sessions or real CPU load count as
    * activity. Returns a warning for the agent to show logged-in users, or "" for none.
    */
-  async heartbeat(token: string, b: Record<string, unknown>): Promise<string> {
+  /** The live workspace a machine's agent token belongs to; 401 otherwise. */
+  async byAgentToken(token: string): Promise<Workspace> {
     if (!token) throw new HttpError(401, "agent token required");
     const ws = await this.db.get<Workspace>(
       "SELECT * FROM workspaces WHERE agent_token_hash = ? AND state NOT IN ('terminated', 'error')",
       sha256(token),
     );
     if (!ws) throw new HttpError(401, "unknown agent token");
+    return ws;
+  }
+
+  async heartbeat(token: string, b: Record<string, unknown>): Promise<string> {
+    const ws = await this.byAgentToken(token);
     const num = (v: unknown, max: number) => {
       const n = Number(v);
       return Number.isFinite(n) && n >= 0 ? Math.min(n, max) : 0;

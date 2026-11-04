@@ -63,7 +63,7 @@ export interface InstancesApi {
   start(req: { project: string; zone: string; instance: string }): Promise<unknown>;
   stop(req: { project: string; zone: string; instance: string }): Promise<unknown>;
   delete(req: { project: string; zone: string; instance: string }): Promise<unknown>;
-  get(req: { project: string; zone: string; instance: string }): Promise<[{ status?: string | null }, ...unknown[]]>;
+  get(req: { project: string; zone: string; instance: string }): Promise<[{ status?: string | null; networkInterfaces?: { networkIP?: string | null }[] | null }, ...unknown[]]>;
 }
 
 const isNotFound = (e: unknown) => {
@@ -141,12 +141,20 @@ export class GcpProvider implements WorkspaceProvider {
     }
   }
 
+  private addresses = new Map<string, string>();
+
+  privateAddress(id: string): string | undefined {
+    return this.addresses.get(id);
+  }
+
   async describe(ids: string[]): Promise<Map<string, MachineState>> {
     const out = new Map<string, MachineState>();
     for (const id of ids) {
       try {
         const [inst] = await this.api.get(this.split(id));
         out.set(id, STATE[String(inst.status ?? "")] ?? "starting");
+        const ip = inst.networkInterfaces?.[0]?.networkIP;
+        if (ip) this.addresses.set(id, String(ip));
       } catch (e) {
         if (!isNotFound(e)) throw e; // a missing VM stays out of the map: it's gone
       }

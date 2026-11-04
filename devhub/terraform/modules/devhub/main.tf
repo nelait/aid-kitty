@@ -45,9 +45,11 @@ locals {
       className   = var.ingress.class_name
       annotations = var.ingress.annotations
       host        = local.host
+      previewHost = var.ingress.preview_host
       tls = {
-        enabled    = startswith(var.public_url, "https://")
-        secretName = var.ingress.tls_secret_name
+        enabled           = startswith(var.public_url, "https://")
+        secretName        = var.ingress.tls_secret_name
+        previewSecretName = var.ingress.preview_tls_secret_name
       }
     }
   }

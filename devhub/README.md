@@ -105,6 +105,25 @@ Set `DEVHUB_POLICY_TOKEN` so AWS and GCP workspaces can fetch the Claude Code po
 - Edits apply to new workspaces. Every version is kept in the audit log, with its SHA-256.
 - Coder templates set machines up in Coder itself, so they don't take one.
 
+## Preview environments
+
+Every open pull request in a configured repository gets its own running copy of the app, at `https://pr-<number>-<repo>.<previews.domain>`, behind your company sign-in:
+
+- **Admin → Previews → Add a repository:** the repo, a workspace template (AWS or GCP) for the machine, the port the app listens on, a build command (e.g. `npm ci && npm run build`) and a start command (e.g. `npm start`). Optionally: only PRs with a label, and how many hours without a push before a preview is removed (default 72).
+- When a PR opens, Dev Hub creates a machine and comments on the PR. The machine downloads the PR's latest commit **through Dev Hub**, so no GitHub credentials ever go onto it. It runs the build as an unprivileged `preview` user, starts the app as a systemd service, and checks it answers. Each push redeploys in place; if a build fails, the last good build keeps serving and the PR comment says so.
+- **Sign-in:** opening a preview goes through Dev Hub's Okta sign-in (a short-lived token is handed to the preview's host, which sets its own cookie). Dev Hub then proxies requests, including WebSockets, to the machine's private IP, and tells the app who's asking in `X-Forwarded-Email` (any value the browser sends is replaced). Previews never get a public IP.
+- **Cost:** the machine time is charged to the PR author's budget, matched by their GitHub login in Dev Hub. PRs from people Dev Hub doesn't know, or from forks (which would run outside code inside your network), are skipped with a comment explaining why. Forks can be allowed per repo.
+- **Cleanup:** a preview is removed when its PR closes or merges, after the hours-without-a-push limit, or when an admin removes it; a new push brings it back. If the author's budget runs out, it stops like a workspace and starts again once there's budget. At most 20 run at once (`previews.maxActive`).
+- **Updates:** with a GitHub webhook, previews react within seconds; without one, on each sync (every 5 minutes by default). Dev Hub only acts on what GitHub's API says, so a failed GitHub call never removes a preview.
+
+**Setup**
+1. Choose a domain for previews, e.g. `preview.devhub.acme.io`. Point `*.preview.devhub.acme.io` at Dev Hub (in the Helm chart: `ingress.previewHost: "*.preview.devhub.acme.io"`) with a wildcard TLS certificate, and set `previews.domain` in the config (or `DEVHUB_PREVIEW_DOMAIN`).
+2. `GITHUB_TOKEN` must be able to read the repositories' pull requests and contents, and write issue comments (a fine-grained token with Pull requests: read, Contents: read, Issues: write; or a classic token with `repo`).
+3. Dev Hub must reach preview machines on the app's port: allow it from Dev Hub's pods in the template's security group (AWS) or a firewall rule for the `devhub-workspace` tag (GCP).
+4. Optional, for immediate updates: set `DEVHUB_PREVIEW_WEBHOOK_SECRET`, and add a webhook in GitHub (repo or organization) to `https://<devhub>/api/previews/webhook`, content type `application/json`, with that secret and the "Pull requests" event.
+
+The app must listen on `$PORT` on all interfaces (`$HOST` is `0.0.0.0`); `DEVHUB_PREVIEW_URL` has its public address. The template's setup script runs first, so install runtimes and databases there (Node.js 22 is already installed). Don't put secrets in build or start commands; fetch them from your secret manager with the machine's role. Changes to a repo's commands apply to previews created after the change.
+
 ## Return on spend
 
 **Admin → Return on spend** puts AI spend (every tool) next to merged pull requests, per team and per month:
@@ -205,6 +224,7 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `DEVHUB_WORKSPACES_AWS_REGION` | Turns on cloud workspaces in this AWS region (see [Cloud workspaces](#cloud-workspaces)) |
 | `DEVHUB_WORKSPACES_GCP_PROJECT` | Turns on Google Compute Engine workspaces in this project |
 | `DEVHUB_WORKSPACES_CODER_URL`, `CODER_SESSION_TOKEN` | Turns on Coder workspaces |
+| `DEVHUB_PREVIEW_DOMAIN`, `DEVHUB_PREVIEW_WEBHOOK_SECRET` | Turns on PR preview environments (wildcard domain), and verifies GitHub's webhook |
 | `DEVHUB_POLICY_TOKEN` | Read-only token developers' machines use to fetch the Claude Code policy (see [One policy for every tool](#one-policy-for-every-tool)) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
 | `DEVHUB_SLACK_WEBHOOK_URL` | Slack notifications for requests, decisions and used-up budgets |
@@ -363,6 +383,9 @@ A person belongs to one team, so adding them to a second pushed group moves them
 | POST | `/api/admin/spend-import` `{tool, period?, rows:[{email, usd}]}` | Admins, for tools without a connector |
 | GET | `/api/admin/report?period=YYYY-MM&format=csv` | Admins |
 | GET | `/api/admin/unmatched`, `/api/admin/audit` | Admins |
+| POST | `/api/previews/webhook` | GitHub (signed with `DEVHUB_PREVIEW_WEBHOOK_SECRET`) |
+| GET | `/api/previews/target`, `/api/previews/source?sha=` | A preview machine (its own token) |
+| POST | `/api/previews/status?sha=&status=` | A preview machine (its own token) |
 
 Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or a `_csrf` form field. The automation bearer token is exempt.
 
@@ -373,6 +396,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 - An email already linked to one SSO identity can't be taken over by another.
 - All HTML output is escaped, responses carry a strict CSP, and CSV cells are protected against formula injection.
 - Every admin change, cap write, request and decision is written to `audit`.
+- Preview hosts get their own HttpOnly cookie, scoped to that host and signed with a key kept in the database, issued only through a 2-minute handoff from a signed-in Dev Hub session. It stops working when the person is deactivated. Proxied requests carry the person's identity in headers Dev Hub sets; the browser can't supply them.
 
 ## Roadmap
 
@@ -395,7 +419,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 2c)** | Idle detection: stop workspaces nobody is using (agent on AWS/GCP, Coder's own activity), with terminal warnings | Idle machines stop costing money in 30 minutes, not 8 hours |
 | **Done (Phase 2d)** | Stop running workspaces when a budget runs out (with a grace period and warnings) or their owner is deactivated | Workspace spend can't run past the budget |
 | **Done (Phase 2e)** | Setup scripts per workspace template (AWS and GCP), with progress and failures shown in the portal and every version audited | Teams get machines ready for their stack, not a bare image |
-| Phase 3 | Per-PR preview environments with TTL | |
+| **Done (Phase 3)** | Per-PR preview environments: a machine per PR, redeployed on push, behind company sign-in, removed on close or after a TTL, charged to the author's budget | Reviewers click a link instead of checking out a branch |
 
 ## Connector notes
 

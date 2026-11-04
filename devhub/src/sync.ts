@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { BudgetAlerts } from "./alerts.js";
 import { emailSender, type EmailSender } from "./notify.js";
 import { OutputService } from "./output.js";
+import { GitHubClient, PreviewService } from "./previews.js";
 import type { WorkspaceProvider } from "./providers/types.js";
 import { WorkspacesConnector, WorkspaceService } from "./workspaces.js";
 import { audit, nowIso, type Db, type User } from "./db.js";
@@ -25,6 +26,7 @@ export class SyncService {
   readonly alerts: BudgetAlerts;
   readonly output: OutputService;
   readonly workspaces: WorkspaceService;
+  readonly previews: PreviewService;
 
   constructor(
     private db: Db,
@@ -36,6 +38,8 @@ export class SyncService {
   ) {
     this.workspaces = new WorkspaceService(db, cfg, opts.workspaceProviders, opts.now);
     if (this.workspaces.enabled) this.connectors.push(new WorkspacesConnector(this.workspaces));
+    const gh = cfg.connectors.copilot?.token ? new GitHubClient(cfg.connectors.copilot.apiUrl ?? "https://api.github.com", cfg.connectors.copilot.token) : null;
+    this.previews = new PreviewService(db, cfg, this.workspaces, gh, opts.now);
     const stopsOnBudget = this.workspaces.enabled && cfg.workspaces?.stopWhenBudgetUsedUp !== false;
     this.alerts = new BudgetAlerts(db, cfg, email, stopsOnBudget ? this.workspaces.budgetGraceMinutes : null);
     this.output = new OutputService(db, cfg);
@@ -66,6 +70,15 @@ export class SyncService {
       } catch (e) {
         // Keep the previous spend for this tool rather than zeroing it on a failed pull.
         results.push({ connector: c.tool, ok: false, message: (e as Error).message });
+      }
+    }
+    // Previews follow open PRs (the webhook makes this immediate; this catches anything it missed).
+    if (this.previews.enabled) {
+      try {
+        const r = await this.previews.reconcile();
+        results.push({ connector: "previews", ok: r.errors.length === 0, message: r.errors.length ? r.errors.join("; ") : `${r.repos} repos checked` });
+      } catch (e) {
+        results.push({ connector: "previews", ok: false, message: (e as Error).message });
       }
     }
     // Only enforce caps from fresh data: if any pull failed, the wallet could be understated.

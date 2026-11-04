@@ -15,6 +15,10 @@ spec:
   tls:
     - hosts: [{{ .Values.ingress.host | quote }}]
       secretName: {{ .Values.ingress.tls.secretName }}
+    {{- with .Values.ingress.previewHost }}
+    - hosts: [{{ . | quote }}]
+      secretName: {{ $.Values.ingress.tls.previewSecretName | default $.Values.ingress.tls.secretName }}
+    {{- end }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
@@ -27,4 +31,16 @@ spec:
                 name: {{ include "devhub.fullname" . }}
                 port:
                   name: http
+    {{- with .Values.ingress.previewHost }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "devhub.fullname" $ }}
+                port:
+                  name: http
+    {{- end }}
 {{- end }}

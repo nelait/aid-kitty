@@ -1,7 +1,7 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { createApp } from "../src/app.js";
+import { attachUpgrades, createApp } from "../src/app.js";
 import { loadConfig, type Config } from "../src/config.js";
 import pg from "pg";
 import { openDb, type Db } from "../src/db.js";
@@ -282,6 +282,7 @@ export async function harness(
     { workspaceProviders: opts.workspaceProviders ?? [], now: opts.now },
   );
   const server = createServer(createApp(db, cfg, sync));
+  attachUpgrades(server, cfg, sync);
   const url = await listen(server);
   cfg.publicUrl = url;
   return {

@@ -4,6 +4,7 @@ import type { Db } from "../db.js";
 import { HttpError } from "../service.js";
 import { fmtUsd } from "../wallet.js";
 import { PROVIDER_LABELS } from "../providers/index.js";
+import type { PreviewService } from "../previews.js";
 import { validateSshKey, type Workspace, type WorkspaceService, type WorkspaceTemplate } from "../workspaces.js";
 import { act, adminGuard, adminTabs, csrfField, esc, flash, options, page, wrap } from "./html.js";
 
@@ -22,7 +23,7 @@ const perHour = (e4: number) => `$${(e4 / 10_000).toFixed(4)}`;
 
 const when = (iso: string | null) => (iso ? `${iso.slice(0, 16).replace("T", " ")} UTC` : "");
 
-export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
+export function workspacesPortalRoutes(db: Db, ws: WorkspaceService, previews?: PreviewService) {
   const r = express.Router();
   r.use(["/workspaces", "/admin/workspaces"], express.urlencoded({ extended: false, limit: "256kb" }));
 
@@ -43,6 +44,8 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
   const actions = (p: Principal, w: Workspace, base: string, extra = "") => {
     const btn = (action: string, label: string, ghost = false) =>
       `<form method="post" action="${base}/${w.id}/${action}" style="display:inline">${csrfField(p)}<button${ghost ? ' class="ghost"' : ""}>${label}</button></form>`;
+    // Previews are managed with their PRs: stopping one would only see it restarted.
+    if (w.kind === "preview") return `<a href="/admin/previews">Manage on Previews</a>`;
     const out: string[] = [];
     if (w.state === "stopped" && !extra) out.push(btn("start", "Start"));
     if (w.state === "running" || w.state === "starting") {
@@ -93,6 +96,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
           `${flash(req)}<h1>Workspaces</h1>
           <p class="muted">Cloud machines for development. Running time and disk count toward your AI budget: ${fmtUsd(costs.get(u.id) ?? 0)} so far this month.</p>
           ${cards || `<div class="card"><p class="muted">You don't have a workspace yet.</p></div>`}
+          ${await previewCard(u.id)}
           <div class="card"><h2>New workspace</h2>
             ${
               !key
@@ -241,6 +245,19 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
     return `${esc(c.instanceType)}${disk}`;
   };
 
+  /** The person's live pull request previews (they pay for them), if previews are on. */
+  const previewCard = async (userId: number) => {
+    if (!previews?.enabled) return "";
+    const mine = (await previews.list()).filter((v) => v.user_id === userId && v.state === "active");
+    if (!mine.length) return "";
+    const rows = [];
+    for (const v of mine) {
+      rows.push(`<tr><td>${esc(v.repo)}#${v.pr_number}<div class="muted">${esc(v.title)}</div></td><td>${esc(await previews.describe(v))}</td><td><a href="${esc(previews.url(v))}">Open</a></td></tr>`);
+    }
+    return `<div class="card scroll"><h2>Your pull request previews</h2><p class="muted">Their machine time counts toward your budget. Each is removed when its PR closes, or after a while without a push.</p>
+      <table><thead><tr><th>Pull request</th><th>Status</th><th></th></tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+  };
+
   const templateForm = (p: Principal, action: string, t: WorkspaceTemplate | null, label: string, kind: string) => {
     const c = t ? (JSON.parse(t.config) as Record<string, unknown>) : {};
     return `<form method="post" action="${action}">${csrfField(p)}<input type="hidden" name="provider" value="${esc(kind)}">
@@ -319,7 +336,7 @@ export function workspacesPortalRoutes(db: Db, ws: WorkspaceService) {
             ${
               all
                 .map(
-                  (w) => `<tr><td>${esc(w.email)}</td><td>${esc(w.name)}<div class="muted"><code>${esc(w.machine_id ?? "")}</code></div></td><td>${esc(w.template)}</td>
+                  (w) => `<tr><td>${esc(w.email)}</td><td>${esc(w.name)}${w.kind === "preview" ? ` <span class="badge">PR preview</span>` : ""}<div class="muted"><code>${esc(w.machine_id ?? "")}</code></div></td><td>${esc(w.template)}</td>
                   <td>${STATE_LABEL[w.state] ?? esc(w.state)}${setupNote(w) ? `<div class="muted">${/failed/.test(w.setup_status ?? "") ? "Setup script failed" : "Setup script running"}</div>` : ""}</td><td>${w.state === "running" || w.state === "starting" ? (w.budget_stop_at ? `<strong>Budget used up:</strong> ${when(w.budget_stop_at)}` : when(w.stop_at)) : ""}</td>
                   <td>${w.state === "running" || w.state === "starting" ? (w.last_active_at ? when(w.last_active_at) : w.idle_minutes ? `<span class="muted">no reports yet</span>` : "") : ""}</td>
                   <td class="n">${fmtUsd(costs.get(w.user_id) ?? 0)}</td><td>${actions(p, w, "/admin/workspaces", "admin")}</td></tr>`,

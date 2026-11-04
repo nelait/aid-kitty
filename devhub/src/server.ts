@@ -1,4 +1,4 @@
-import { createApp } from "./app.js";
+import { attachUpgrades, createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { openDb } from "./db.js";
 import { SyncService } from "./sync.js";
@@ -21,6 +21,7 @@ const server = createApp(db, cfg, sync).listen(cfg.port, () => {
   console.log(`Dev Hub listening on ${cfg.publicUrl} (port ${cfg.port}, ${db.dialect})`);
   stopSync = sync.start();
 });
+attachUpgrades(server, cfg, sync);
 let stopSync = () => {};
 
 const shutdown = () => {
