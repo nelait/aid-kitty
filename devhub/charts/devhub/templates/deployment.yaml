@@ -92,6 +92,43 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+        {{- if .Values.gcpMarketplace.enabled }}
+        # Google Cloud Marketplace metering agent (usage reports for billing).
+        - name: ubbagent
+          image: {{ .Values.gcpMarketplace.ubbagentImage | quote }}
+          env:
+            - name: AGENT_CONFIG_FILE
+              value: /etc/ubbagent/config.yaml
+            - name: AGENT_LOCAL_PORT
+              value: "6080"
+            - name: AGENT_STATE_DIR
+              value: /var/lib/ubbagent
+            - name: AGENT_REPORT_DIR
+              value: /var/lib/ubbagent/reports
+            - name: AGENT_ENCODED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gcpMarketplace.reportingSecret }}
+                  key: reporting-key
+            - name: AGENT_CONSUMER_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gcpMarketplace.reportingSecret }}
+                  key: consumer-id
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          volumeMounts:
+            - name: ubbagent-config
+              mountPath: /etc/ubbagent
+              readOnly: true
+            - name: ubbagent-state
+              mountPath: /var/lib/ubbagent
+              subPath: ubbagent
+        {{- end }}
       volumes:
         {{- if not $pg }}
         - name: data
@@ -107,6 +144,19 @@ spec:
             name: {{ include "devhub.fullname" . }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.gcpMarketplace.enabled }}
+        - name: ubbagent-config
+          configMap:
+            name: {{ include "devhub.fullname" . }}-ubbagent
+        # Usage the agent hasn't delivered yet. With SQLite it shares the data volume so it survives restarts.
+        - name: ubbagent-state
+          {{- if and (not $pg) .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "devhub.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}

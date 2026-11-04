@@ -1,0 +1,77 @@
+# Google Cloud Marketplace deployment form. Property names are Helm value paths in the chart.
+# build.sh sets publishedVersion from the chart's appVersion.
+x-google-marketplace:
+  schemaVersion: v2
+  applicationApiVersion: v1beta1
+  publishedVersion: "0.1.0"
+  publishedVersionMetadata:
+    releaseNote: >-
+      Dev Hub: one AI budget, policy and cloud workspaces across Claude, GitHub Copilot and Cursor.
+  images:
+    "":
+      properties:
+        image.repository:
+          type: REPO_WITH_REGISTRY
+        image.tag:
+          type: TAG
+    ubbagent:
+      properties:
+        gcpMarketplace.ubbagentImage:
+          type: FULL
+
+properties:
+  name:
+    type: string
+    x-google-marketplace:
+      type: NAME
+  namespace:
+    type: string
+    x-google-marketplace:
+      type: NAMESPACE
+  gcpMarketplace.reportingSecret:
+    type: string
+    x-google-marketplace:
+      type: REPORTING_SECRET
+  config.publicUrl:
+    type: string
+    title: Dev Hub's address
+    description: The URL people will open, e.g. https://devhub.example.com. Used for sign-in redirects and links in emails.
+    pattern: ^https?://
+  config.auth.oidc.issuer:
+    type: string
+    title: Identity provider issuer URL
+    description: Your OIDC issuer, e.g. https://example.okta.com/oauth2/default
+  config.auth.oidc.clientId:
+    type: string
+    title: OIDC client ID
+  secrets.existingSecret:
+    type: string
+    title: Name of the Secret with Dev Hub's credentials
+    description: >-
+      A Secret in this namespace you create first, with OIDC_CLIENT_SECRET, DEVHUB_ADMIN_TOKEN and any
+      connector keys (CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY). See the admin guide.
+  persistence.storageClass:
+    type: string
+    title: Storage class for Dev Hub's data
+    x-google-marketplace:
+      type: STORAGE_CLASS
+      storageClass:
+        type: SSD
+  ingress.enabled:
+    type: boolean
+    title: Create an Ingress
+    default: false
+  ingress.host:
+    type: string
+    title: Ingress host name
+    description: Used when an Ingress is created, e.g. devhub.example.com
+    default: devhub.example.com
+
+required:
+  - name
+  - namespace
+  - gcpMarketplace.reportingSecret
+  - config.publicUrl
+  - config.auth.oidc.issuer
+  - config.auth.oidc.clientId
+  - secrets.existingSecret

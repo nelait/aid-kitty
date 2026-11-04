@@ -2,6 +2,7 @@ import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Config } from "./config.js";
 import type { Queryable } from "./db.js";
+import { MARKETPLACE_GRACE_DAYS, marketplaceState } from "./marketplace.js";
 
 /**
  * Offline-verifiable license: a JSON payload signed with the vendor's Ed25519 key.
@@ -58,6 +59,10 @@ export interface LicenseStatus {
   activeUsers: number;
   /** Whether new people can be added or reactivated right now. */
   canActivate: boolean;
+  /** Where the entitlement comes from (a license file unless bought through a marketplace). */
+  source?: "file" | "aws-marketplace" | "gcp-marketplace";
+  /** Billed per active person with no seat limit (Google Cloud Marketplace). */
+  metered?: boolean;
   message: string;
 }
 
@@ -138,6 +143,7 @@ export async function licenseStatus(db: Queryable, cfg: Config, now = Date.now()
     canActivate: activeUsers < EVALUATION_SEATS,
     message,
   });
+  if (cfg.marketplace?.aws || cfg.marketplace?.gcp) return marketplaceLicense(db, cfg, now, activeUsers, evaluation);
   if (!text) return evaluation("evaluation", `No license installed. Evaluation mode allows ${EVALUATION_SEATS} active people.`);
   const parsed = parseAndVerify(text);
   if (!parsed.ok) return evaluation("invalid", `${parsed.error}. Evaluation limits apply (${EVALUATION_SEATS} active people).`);
@@ -169,6 +175,46 @@ export async function licenseStatus(db: Queryable, cfg: Config, now = Date.now()
     canActivate: state !== "expired" && underSeats,
     message,
   };
+}
+
+/** The entitlement from AWS or Google Cloud Marketplace, under the same rules as a license file. */
+async function marketplaceLicense(
+  db: Queryable,
+  cfg: Config,
+  now: number,
+  activeUsers: number,
+  evaluation: (state: LicenseStatus["state"], message: string) => LicenseStatus,
+): Promise<LicenseStatus> {
+  const aws = Boolean(cfg.marketplace?.aws);
+  const source = aws ? ("aws-marketplace" as const) : ("gcp-marketplace" as const);
+  const where = aws ? "AWS Marketplace" : "Google Cloud Marketplace";
+  const m = await marketplaceState(db);
+  if (!m || m.source !== (aws ? "aws" : "gcp")) {
+    return { ...evaluation("evaluation", `Checking ${where}. Until the first check, evaluation limits apply (${EVALUATION_SEATS} active people).`), source };
+  }
+  const graceEnds = m.okAt ? Date.parse(m.okAt) + MARKETPLACE_GRACE_DAYS * 86_400_000 : 0;
+  const inGrace = !m.ok && m.failure === "error" && now < graceEnds;
+  const days = Math.ceil((graceEnds - now) / 86_400_000);
+  const common = { customer: m.customer ?? undefined, expiresAt: m.expiresAt ?? undefined, activeUsers, source, plan: where };
+
+  if (!aws) {
+    const metered = { ...common, seats: activeUsers, seatLimit: Number.MAX_SAFE_INTEGER, metered: true };
+    if (m.ok) return { ...metered, state: "valid", canActivate: true, message: `Billed through ${where} for each active person, every hour.` };
+    if (inGrace) return { ...metered, state: "grace", canActivate: true, message: `${m.error} Fix it within ${days} days to keep adding people.` };
+    if (m.okAt) return { ...metered, state: "expired", canActivate: false, message: `${m.error} Usage hasn't reached Google for over ${MARKETPLACE_GRACE_DAYS} days, so new people can't be added. Existing people and budget enforcement keep working.` };
+    return { ...evaluation("invalid", `${m.error} Evaluation limits apply until usage reporting works.`), source };
+  }
+
+  const seats = m.seats ?? 0;
+  const seatLimit = seats + Math.max(1, Math.floor(seats * 0.1));
+  const counted = { ...common, seats, seatLimit };
+  if (m.ok) {
+    const message = activeUsers > seats ? `${activeUsers} active people on ${seats} purchased through ${where}. Up to ${seatLimit} are allowed while you add more.` : `${seats} people purchased through ${where}${m.expiresAt ? ` until ${m.expiresAt.slice(0, 10)}` : ""}.`;
+    return { ...counted, state: "valid", canActivate: activeUsers < seatLimit, message };
+  }
+  if (inGrace && seats > 0) return { ...counted, state: "grace", canActivate: activeUsers < seatLimit, message: `${m.error} Using the last good check for ${days} more days.` };
+  if (m.okAt) return { ...counted, state: "expired", canActivate: false, message: `${m.error} Existing people and budget enforcement keep working; new people can't be added until the subscription is renewed.` };
+  return { ...evaluation("invalid", `${m.error} Evaluation limits apply (${EVALUATION_SEATS} active people).`), source };
 }
 
 export class LicenseLimitError extends Error {}

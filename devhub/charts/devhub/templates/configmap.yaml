@@ -1,3 +1,13 @@
+{{- $cfg := deepCopy .Values.config }}
+{{- if and .Values.awsMarketplace.productSku .Values.gcpMarketplace.enabled }}
+{{- fail "awsMarketplace and gcpMarketplace can't both be on" }}
+{{- end }}
+{{- if .Values.awsMarketplace.productSku }}
+{{- $_ := set $cfg "marketplace" (dict "aws" (dict "productSku" .Values.awsMarketplace.productSku "entitlement" .Values.awsMarketplace.entitlement)) }}
+{{- end }}
+{{- if .Values.gcpMarketplace.enabled }}
+{{- $_ := set $cfg "marketplace" (dict "gcp" (dict "metric" .Values.gcpMarketplace.metric "agentUrl" "http://127.0.0.1:6080")) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -5,4 +15,4 @@ metadata:
   labels: {{- include "devhub.labels" . | nindent 4 }}
 data:
   devhub.config.json: |
-    {{- .Values.config | toPrettyJson | nindent 4 }}
+    {{- $cfg | toPrettyJson | nindent 4 }}

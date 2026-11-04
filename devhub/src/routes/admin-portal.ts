@@ -62,7 +62,7 @@ export function adminPortalRoutes(db: Db, cfg: Config, sync: SyncService) {
           <div class="card">
             <form method="get" class="row"><div><input name="q" value="${esc(q)}" placeholder="Search by email or name"></div>
               <div style="flex:0 0 auto;min-width:0"><button class="ghost">Search</button></div></form>
-            <p class="muted">${license.activeUsers} active of ${license.seatLimit} allowed by the license. Spend is for ${esc(currentPeriod())}.</p>
+            <p class="muted">${license.metered ? `${license.activeUsers} active, each billed through ${esc(license.plan ?? "the marketplace")}` : `${license.activeUsers} active of ${license.seatLimit} allowed by the license`}. Spend is for ${esc(currentPeriod())}.</p>
             <div class="scroll"><table><thead><tr><th>Person</th><th>Team</th><th></th><th class="n">Spent</th><th class="n">Budget</th></tr></thead>
             <tbody>${rows.join("") || `<tr><td colspan="5" class="muted">No one found.</td></tr>`}</tbody></table></div>
             ${users.length === 500 ? `<p class="muted">Showing the first 500. Search to narrow it down.</p>` : ""}
@@ -391,8 +391,9 @@ export function adminPortalRoutes(db: Db, cfg: Config, sync: SyncService) {
       const l = await licenseStatus(db, cfg);
       const facts: [string, string][] = [
         ["Status", { valid: "Valid", grace: "Expired (grace period)", expired: "Expired", evaluation: "Evaluation", invalid: "Invalid" }[l.state]],
+        ...(l.source && l.source !== "file" ? ([["Bought through", l.plan ?? "—"]] as [string, string][]) : []),
         ["Licensed to", l.customer ?? "—"],
-        ["Seats", `${l.seats} (up to ${l.seatLimit} with true-up)`],
+        ["Seats", l.metered ? "No limit: billed for each active person" : `${l.seats} (up to ${l.seatLimit} with true-up)`],
         ["Active people", String(l.activeUsers)],
         ["Expires", l.expiresAt ? l.expiresAt.slice(0, 10) : "—"],
         ["License ID", l.licenseId ?? "—"],
@@ -405,12 +406,20 @@ export function adminPortalRoutes(db: Db, cfg: Config, sync: SyncService) {
           <div class="card"${l.state === "valid" && l.canActivate ? "" : ' style="border-color:var(--warn)"'}><p>${esc(l.message)}</p>
             <table><tbody>${facts.map(([k, v]) => `<tr><th style="width:180px">${k}</th><td>${esc(v)}</td></tr>`).join("")}</tbody></table>
             <p class="muted">Budget enforcement keeps working whatever the license state; only adding people is limited.</p></div>
-          <div class="card"><h2>Install a license</h2>
+          ${
+            l.source && l.source !== "file"
+              ? `<div class="card"><h2>Subscription</h2><p class="muted">${
+                  l.source === "aws-marketplace"
+                    ? "Dev Hub checks the AWS License Manager license on every sync. To change the number of people, update the subscription in AWS Marketplace; Dev Hub picks it up within minutes."
+                    : "Dev Hub reports the number of active people to Google Cloud Marketplace every hour through the metering agent next to it. Manage the subscription in the Google Cloud console."
+                }</p></div>`
+              : `<div class="card"><h2>Install a license</h2>
             <form method="post" action="/admin/license">${csrfField(p)}
               <label>Paste the contents of the license file from your vendor</label>
               <textarea name="license_file" rows="8" required placeholder='{"license": {...}, "signature": "..."}'></textarea>
               <p><button>Install</button></p>
-            </form></div>`,
+            </form></div>`
+          }`,
         ),
       );
     }),

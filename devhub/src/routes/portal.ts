@@ -46,7 +46,7 @@ function walletCard(cfg: Config, w: WalletStatus): string {
 function licenseCard(l: LicenseStatus): string {
   const attention = l.state !== "valid" || !l.canActivate || l.activeUsers > l.seats;
   return `<div class="card"${attention ? ' style="border-color:var(--warn)"' : ""}><h2>License</h2>
-    <p>${esc(l.message)}</p><p class="muted">${l.activeUsers} active people · ${l.seats} seats${
+    <p>${esc(l.message)}</p><p class="muted">${l.activeUsers} active people · ${l.metered ? "billed per person" : `${l.seats} seats`}${
       l.licenseId ? ` · ${esc(l.licenseId)}` : ""
     }. <a href="/admin/license">Manage license</a></p></div>`;
 }

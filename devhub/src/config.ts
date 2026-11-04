@@ -1,4 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
+import type { MarketplaceConfig } from "./marketplace.js";
 
 export interface OidcConfig {
   issuer: string;
@@ -110,6 +111,8 @@ export interface Config {
     /** Post a comment on each PR with the preview's link and status (default true). */
     comment?: boolean;
   };
+  /** Sold through AWS or Google Cloud Marketplace instead of a license file (see marketplace.ts). */
+  marketplace?: MarketplaceConfig;
   /** How often to recount merged PRs for the return-on-spend report (default 6). */
   outputRefreshHours?: number;
   /** Pause between GitHub search calls; search allows about 30 a minute (default 2100). */
@@ -182,6 +185,10 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
   if (!cfg.workspaces?.coder && env.DEVHUB_WORKSPACES_CODER_URL) {
     cfg.workspaces = { ...cfg.workspaces, coder: { url: env.DEVHUB_WORKSPACES_CODER_URL, token: env.CODER_SESSION_TOKEN ?? "" } };
   }
+  if (!cfg.marketplace && env.DEVHUB_AWS_MARKETPLACE_PRODUCT_SKU) cfg.marketplace = { aws: { productSku: env.DEVHUB_AWS_MARKETPLACE_PRODUCT_SKU } };
+  if (!cfg.marketplace && env.DEVHUB_GCP_MARKETPLACE === "1") cfg.marketplace = { gcp: { agentUrl: env.DEVHUB_UBBAGENT_URL } };
+  if (cfg.marketplace?.aws && cfg.marketplace.gcp) throw new Error("marketplace: configure aws or gcp, not both");
+  if (cfg.marketplace?.aws && !/^[\w-]{1,128}$/.test(cfg.marketplace.aws.productSku ?? "")) throw new Error("marketplace.aws.productSku must be the product SKU from AWS Marketplace");
   if (!cfg.previews && env.DEVHUB_PREVIEW_DOMAIN) cfg.previews = { domain: env.DEVHUB_PREVIEW_DOMAIN };
   if (cfg.previews) {
     cfg.previews.domain = cfg.previews.domain.trim().toLowerCase().replace(/^\*\./, "");

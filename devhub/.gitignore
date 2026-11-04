@@ -8,3 +8,7 @@ devhub.config.json
 .terraform/
 .terraform.lock.hcl
 terraform.tfstate*
+
+# Marketplace build output
+marketplace/gcp/chart/
+marketplace/*/build/

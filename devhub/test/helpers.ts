@@ -2,6 +2,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { attachUpgrades, createApp } from "../src/app.js";
+import type { LicenseManagerApi } from "../src/marketplace.js";
 import { loadConfig, type Config } from "../src/config.js";
 import pg from "pg";
 import { openDb, type Db } from "../src/db.js";
@@ -248,7 +249,7 @@ export interface Harness {
 
 export async function harness(
   over: Partial<Config> = {},
-  opts: { workspaceProviders?: WorkspaceProvider[]; now?: () => number } = {},
+  opts: { workspaceProviders?: WorkspaceProvider[]; now?: () => number; licenseManager?: LicenseManagerApi } = {},
 ): Promise<Harness> {
   const claude = await new MockClaude().start();
   const github = await new MockGitHub().start();
@@ -279,7 +280,7 @@ export async function harness(
         emails.push(e);
       },
     },
-    { workspaceProviders: opts.workspaceProviders ?? [], now: opts.now },
+    { workspaceProviders: opts.workspaceProviders ?? [], now: opts.now, licenseManager: opts.licenseManager },
   );
   const server = createServer(createApp(db, cfg, sync));
   attachUpgrades(server, cfg, sync);

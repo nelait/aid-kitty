@@ -6,4 +6,5 @@ devhub.config.json
 *.pem
 *.license.json
 charts
+marketplace
 terraform

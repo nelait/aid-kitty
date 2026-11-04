@@ -224,6 +224,8 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `DEVHUB_WORKSPACES_AWS_REGION` | Turns on cloud workspaces in this AWS region (see [Cloud workspaces](#cloud-workspaces)) |
 | `DEVHUB_WORKSPACES_GCP_PROJECT` | Turns on Google Compute Engine workspaces in this project |
 | `DEVHUB_WORKSPACES_CODER_URL`, `CODER_SESSION_TOKEN` | Turns on Coder workspaces |
+| `DEVHUB_AWS_MARKETPLACE_PRODUCT_SKU` | Bought through AWS Marketplace: check this product's License Manager license instead of a license file |
+| `DEVHUB_GCP_MARKETPLACE=1`, `DEVHUB_UBBAGENT_URL` | Bought through Google Cloud Marketplace: report usage to the metering agent (default `http://127.0.0.1:6080`) |
 | `DEVHUB_PREVIEW_DOMAIN`, `DEVHUB_PREVIEW_WEBHOOK_SECRET` | Turns on PR preview environments (wildcard domain), and verifies GitHub's webhook |
 | `DEVHUB_POLICY_TOKEN` | Read-only token developers' machines use to fetch the Claude Code policy (see [One policy for every tool](#one-policy-for-every-tool)) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
@@ -340,6 +342,18 @@ npm run license -- verify acme.license.json
 
 This build has **no vendor public key yet**, so every install runs in evaluation mode until you generate your key pair and set `VENDOR_PUBLIC_KEY_PEM`.
 
+
+### Buying through AWS or Google Cloud Marketplace
+
+Instead of a license file, Dev Hub can be bought through a cloud marketplace and billed on the buyer's cloud invoice:
+
+- **AWS Marketplace** (contract pricing, per person): set `awsMarketplace.productSku` in the Helm chart (or `DEVHUB_AWS_MARKETPLACE_PRODUCT_SKU`). On every sync Dev Hub reads the buyer's AWS License Manager license for the product, only trusting licenses AWS Marketplace issued, and checks it out. The purchased Users become the seat count, with the usual 10% true-up allowance. Its service account needs `license-manager:ListReceivedLicenses` and `license-manager:CheckoutLicense` ([policy](marketplace/aws/iam-policy.json)).
+- **Google Cloud Marketplace** (usage-based, per active person per hour): the chart's `gcpMarketplace.*` values add Google's metering agent as a sidecar. Every hour Dev Hub reports the number of active people. Each hour is reported exactly once, even with several replicas, and up to a day is caught up after an outage. There's no seat limit.
+- If a check or report keeps failing (network, permissions, agent down), the last good state holds for 30 days. After that, or as soon as AWS says the subscription has ended, no new people can be added. As with license files, existing people and budget enforcement keep working.
+- Admin → License shows where the subscription comes from and its state.
+
+The packaging scripts and the seller-side checklist are in [`marketplace/`](marketplace/README.md).
+
 ## SCIM provisioning (Okta)
 
 1. Generate a long random token and set it as `DEVHUB_SCIM_TOKEN`.
@@ -414,7 +428,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1h)** | Budget alerts by email at 80% and 100%; managers told when someone runs out | People hear before they're blocked |
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
-| P1 | AWS/GCP Marketplace listings | Distribution |
+| **Done (Phase 1l)** | AWS Marketplace (contract pricing via License Manager) and Google Cloud Marketplace (hourly usage via the metering agent) integrations, chart support and release scripts; listings themselves are made in the seller consoles | Buyers pay on their cloud bill and draw down committed spend |
 | **Done (Phase 2b)** | Google Compute Engine and Coder workspace backends alongside AWS | Workspaces wherever the customer runs |
 | **Done (Phase 2c)** | Idle detection: stop workspaces nobody is using (agent on AWS/GCP, Coder's own activity), with terminal warnings | Idle machines stop costing money in 30 minutes, not 8 hours |
 | **Done (Phase 2d)** | Stop running workspaces when a budget runs out (with a grace period and warnings) or their owner is deactivated | Workspace spend can't run past the budget |

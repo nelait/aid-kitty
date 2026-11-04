@@ -1,0 +1,38 @@
+{{- if .Values.gcpMarketplace.enabled }}
+{{- if not .Values.gcpMarketplace.reportingSecret }}
+{{- fail "gcpMarketplace.reportingSecret is required (Google Cloud Marketplace creates it at deploy time)" }}
+{{- end }}
+{{- if not .Values.gcpMarketplace.serviceName }}
+{{- fail "gcpMarketplace.serviceName is required (the service name from the Producer Portal)" }}
+{{- end }}
+# Google Cloud Marketplace metering agent: Dev Hub reports active people each hour on
+# 127.0.0.1:6080; the agent keeps them on disk and forwards them to Google Service Control.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "devhub.fullname" . }}-ubbagent
+  labels: {{- include "devhub.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    identities:
+    - name: gcp
+      gcp:
+        encodedServiceAccountKey: $AGENT_ENCODED_KEY
+    metrics:
+    - name: {{ .Values.gcpMarketplace.metric }}
+      type: int
+      passthrough: {}
+      endpoints:
+      - name: on_disk
+      - name: servicecontrol
+    endpoints:
+    - name: on_disk
+      disk:
+        reportDir: /var/lib/ubbagent/reports
+        expireSeconds: 3600
+    - name: servicecontrol
+      servicecontrol:
+        identity: gcp
+        serviceName: {{ .Values.gcpMarketplace.serviceName }}
+        consumerId: $AGENT_CONSUMER_ID
+{{- end }}

@@ -86,6 +86,25 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# Sold through AWS Marketplace (container product with contract pricing): the product SKU
+# turns on the AWS License Manager check instead of a license file. Dev Hub's service account
+# needs license-manager:ListReceivedLicenses and license-manager:CheckoutLicense (IRSA below).
+awsMarketplace:
+  productSku: ""
+  entitlement: Users   # the pricing dimension's API name
+
+# Sold through Google Cloud Marketplace (Kubernetes app, usage-based pricing): a metering
+# sidecar reports active people each hour. Google's deployer fills these in.
+gcpMarketplace:
+  enabled: false
+  reportingSecret: ""   # created by Google Cloud Marketplace
+  serviceName: ""       # from the Producer Portal, e.g. devhub.endpoints.your-project.cloud.goog
+  metric: active_users  # the pricing metric's ID in the Producer Portal (one unit = one person for one hour)
+  ubbagentImage: gcr.io/cloud-marketplace-tools/metering/ubbagent:latest
+  partnerId: ""
+  productId: devhub
+  partnerName: ""
+
 serviceAccount:
   create: true
   name: ""

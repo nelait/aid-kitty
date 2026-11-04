@@ -8,6 +8,7 @@ import { BudgetAlerts } from "./alerts.js";
 import { emailSender, type EmailSender } from "./notify.js";
 import { OutputService } from "./output.js";
 import { GitHubClient, PreviewService } from "./previews.js";
+import { MarketplaceService, type LicenseManagerApi } from "./marketplace.js";
 import type { WorkspaceProvider } from "./providers/types.js";
 import { WorkspacesConnector, WorkspaceService } from "./workspaces.js";
 import { audit, nowIso, type Db, type User } from "./db.js";
@@ -27,6 +28,7 @@ export class SyncService {
   readonly output: OutputService;
   readonly workspaces: WorkspaceService;
   readonly previews: PreviewService;
+  readonly marketplace: MarketplaceService;
 
   constructor(
     private db: Db,
@@ -34,12 +36,13 @@ export class SyncService {
     extra: Connector[] = [],
     email: EmailSender = emailSender(cfg),
     /** workspaceProviders replaces the configured backends (tests pass fakes). */
-    opts: { workspaceProviders?: WorkspaceProvider[]; now?: () => number } = {},
+    opts: { workspaceProviders?: WorkspaceProvider[]; now?: () => number; licenseManager?: LicenseManagerApi } = {},
   ) {
     this.workspaces = new WorkspaceService(db, cfg, opts.workspaceProviders, opts.now);
     if (this.workspaces.enabled) this.connectors.push(new WorkspacesConnector(this.workspaces));
     const gh = cfg.connectors.copilot?.token ? new GitHubClient(cfg.connectors.copilot.apiUrl ?? "https://api.github.com", cfg.connectors.copilot.token) : null;
     this.previews = new PreviewService(db, cfg, this.workspaces, gh, opts.now);
+    this.marketplace = new MarketplaceService(db, cfg, { licenseManager: opts.licenseManager, now: opts.now });
     const stopsOnBudget = this.workspaces.enabled && cfg.workspaces?.stopWhenBudgetUsedUp !== false;
     this.alerts = new BudgetAlerts(db, cfg, email, stopsOnBudget ? this.workspaces.budgetGraceMinutes : null);
     this.output = new OutputService(db, cfg);
@@ -71,6 +74,11 @@ export class SyncService {
         // Keep the previous spend for this tool rather than zeroing it on a failed pull.
         results.push({ connector: c.tool, ok: false, message: (e as Error).message });
       }
+    }
+    // Marketplace installs: check the AWS entitlement, or report the hour's usage to Google.
+    if (this.marketplace.source) {
+      const m = await this.marketplace.tick();
+      results.push({ connector: `${m!.source}-marketplace`, ok: m!.ok, message: m!.ok ? (m!.seats ? `${m!.seats} people purchased` : "usage reported") : m!.error ?? "" });
     }
     // Previews follow open PRs (the webhook makes this immediate; this catches anything it missed).
     if (this.previews.enabled) {

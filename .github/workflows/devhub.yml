@@ -84,6 +84,30 @@ jobs:
             echo "expected the chart to refuse SQLite with 2 replicas" >&2
             exit 1
           fi
+      - name: Marketplace variants
+        run: |
+          # AWS Marketplace: the product SKU goes into Dev Hub's config.
+          helm template devhub charts/devhub --set awsMarketplace.productSku=prod-abc123 | grep -q '"productSku": "prod-abc123"'
+          # Google Cloud Marketplace: metering sidecar, its config, the Application, and no ServiceAccount.
+          gcp="--set gcpMarketplace.enabled=true --set gcpMarketplace.reportingSecret=devhub-reporting --set gcpMarketplace.serviceName=devhub.endpoints.p.cloud.goog --set serviceAccount.create=false"
+          helm lint charts/devhub --strict $gcp
+          out=$(helm template devhub charts/devhub $gcp)
+          for want in 'kind: Application' 'name: ubbagent' 'key: reporting-key' 'serviceName: devhub.endpoints.p.cloud.goog' '"agentUrl": "http://127.0.0.1:6080"'; do
+            echo "$out" | grep -qF "$want" || { echo "missing: $want" >&2; exit 1; }
+          done
+          if echo "$out" | grep -q 'kind: ServiceAccount'; then echo "Google Cloud Marketplace charts must not create ServiceAccounts" >&2; exit 1; fi
+          if helm template devhub charts/devhub --set gcpMarketplace.enabled=true > /dev/null 2>&1; then
+            echo "expected the chart to refuse Google Cloud Marketplace without a reporting secret" >&2
+            exit 1
+          fi
+          if helm template devhub charts/devhub $gcp --set awsMarketplace.productSku=x > /dev/null 2>&1; then
+            echo "expected the chart to refuse both marketplaces at once" >&2
+            exit 1
+          fi
+      - name: Google Cloud Marketplace deployer image builds
+        run: |
+          mkdir -p marketplace/gcp/chart && cp -r charts/devhub marketplace/gcp/chart/devhub
+          docker build -q -t devhub-deployer:ci marketplace/gcp > /dev/null
 
   terraform:
     runs-on: ubuntu-24.04
