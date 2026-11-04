@@ -7,6 +7,7 @@ locals {
     image = {
       repository = var.image_repository
       tag        = var.image_tag
+      digest     = var.image_digest
     }
     database     = { type = var.database_type }
     replicaCount = var.replicas

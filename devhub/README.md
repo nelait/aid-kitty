@@ -146,6 +146,29 @@ helm install devhub charts/devhub -n devhub --create-namespace \
 
 **Terraform** (`terraform/modules/devhub`): installs the chart into an existing cluster and creates the Secret. Set `database_type = "postgres"`, `database_url` and `replicas` for high availability. See `terraform/examples/basic` for a complete example. Secrets passed in `var.secrets` end up in Terraform state, so protect the state or pass `existing_secret` instead. The module outputs the Okta redirect URI and SCIM base URL to paste into Okta.
 
+## Supply chain: signed images and SBOMs
+
+Every image CI publishes (from `main` and `devhub-v*` tags) is:
+
+- **Signed** with [Sigstore cosign](https://docs.sigstore.dev/) using keyless signing: the signature is tied to this repository's `devhub.yml` workflow through GitHub's OIDC identity, so there's no signing key to leak or rotate. Signatures are recorded in Sigstore's public transparency log.
+- **Shipped with an SBOM**: an SPDX SBOM (made with Syft) is attached to the image as a signed attestation, and BuildKit also attaches its own SBOM and SLSA build provenance. Every CI run, pull requests included, keeps the SPDX file as a downloadable artifact.
+
+CI verifies both right after signing. Customers can check them before deploying:
+
+```bash
+IMAGE=ghcr.io/your-org/devhub@sha256:...   # the digest you plan to deploy
+ID='https://github.com/your-org/your-repo/.github/workflows/devhub.yml@refs/tags/devhub-v0.1.0'
+
+cosign verify "$IMAGE" --certificate-identity "$ID" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+cosign verify-attestation "$IMAGE" --type spdxjson --certificate-identity "$ID" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload' | base64 -d | jq '.predicate.packages | length'
+```
+
+Then deploy that exact image by digest: `image.digest` in Helm or `image_digest` in Terraform (both reject anything that isn't `sha256:` plus 64 hex characters). For an admission controller that refuses unsigned images, point Sigstore policy-controller or Kyverno at the same identity and issuer.
+
 ## Licensing
 
 Licenses are JSON files signed with the vendor's Ed25519 key and checked offline: Dev Hub never calls home.
@@ -234,6 +257,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
 | **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
+| **Done (Phase 1i)** | Keyless-signed images, SPDX SBOM attestation, SLSA provenance, deploy by digest | Customers can verify what they run |
 | **Done (Phase 1h)** | Budget alerts by email at 80% and 100%; managers told when someone runs out | People hear before they're blocked |
 | **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |

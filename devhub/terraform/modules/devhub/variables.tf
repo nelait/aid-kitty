@@ -33,6 +33,16 @@ variable "image_tag" {
   default     = ""
 }
 
+variable "image_digest" {
+  description = "Pin the exact image you verified with cosign, e.g. sha256:4f2c... Overrides image_tag."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.image_digest == "" || can(regex("^sha256:[a-f0-9]{64}$", var.image_digest))
+    error_message = "image_digest must look like sha256:<64 hex characters>."
+  }
+}
+
 variable "public_url" {
   description = "External URL of the portal, e.g. https://devhub.acme.io. Used for OIDC and SCIM URLs."
   type        = string

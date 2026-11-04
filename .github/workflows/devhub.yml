@@ -76,6 +76,8 @@ jobs:
           helm template devhub charts/devhub > /dev/null
           helm template devhub charts/devhub --set database.type=postgres --set replicaCount=3 \
             --set secrets.existingSecret=devhub --set ingress.enabled=true > /dev/null
+          helm template devhub charts/devhub \
+            --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000 | grep -q '@sha256:0000' 
       - name: SQLite with two replicas is refused
         run: |
           if helm template devhub charts/devhub --set replicaCount=2 > /dev/null 2>&1; then
@@ -105,6 +107,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write # keyless signing: cosign gets a short-lived certificate for this workflow from Sigstore
+    env:
+      PUBLISH: ${{ github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -117,19 +122,23 @@ jobs:
             type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
             type=match,pattern=devhub-v(.*),group=1
       - name: Log in to GitHub Container Registry
-        if: github.event_name == 'push'
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Pull requests build the image to prove it builds; only main and devhub-v* tags publish it.
-      - uses: docker/build-push-action@v6
+      # BuildKit attaches an SBOM and SLSA provenance to the published image.
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: devhub
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          sbom: ${{ env.PUBLISH == 'true' }}
+          provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Smoke-test the image
@@ -143,3 +152,44 @@ jobs:
           done
           docker logs devhub
           exit 1
+      - name: Image reference
+        id: ref
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          if [ "$PUBLISH" = "true" ]; then
+            echo "image=ghcr.io/${owner}/devhub@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=devhub:ci" >> "$GITHUB_OUTPUT"
+          fi
+      # An SPDX SBOM of the image, kept as a workflow artifact on every run (so PRs exercise it too).
+      - name: SBOM (SPDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.ref.outputs.image }}
+          format: spdx-json
+          output-file: devhub.spdx.json
+          artifact-name: devhub-sbom.spdx.json
+      - uses: sigstore/cosign-installer@v3
+        if: env.PUBLISH == 'true'
+      - name: Sign the image and attest its SBOM
+        if: env.PUBLISH == 'true'
+        working-directory: .
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+        run: |
+          cosign sign --yes "$IMAGE"
+          cosign attest --yes --type spdxjson --predicate devhub.spdx.json "$IMAGE"
+      - name: Verify the signature and SBOM attestation
+        if: env.PUBLISH == 'true'
+        working-directory: .
+        env:
+          IMAGE: ${{ steps.ref.outputs.image }}
+          IDENTITY: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/devhub.yml@${{ github.ref }}
+        run: |
+          cosign verify "$IMAGE" \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          cosign verify-attestation "$IMAGE" --type spdxjson \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+          echo "Signed and attested: $IMAGE" >> "$GITHUB_STEP_SUMMARY"

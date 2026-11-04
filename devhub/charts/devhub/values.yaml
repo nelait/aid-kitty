@@ -1,6 +1,8 @@
 image:
   repository: ghcr.io/your-org/devhub
   tag: ""            # defaults to the chart's appVersion
+  # Pin the exact image you verified (cosign verify ...), e.g. sha256:4f2c...; overrides tag.
+  digest: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
