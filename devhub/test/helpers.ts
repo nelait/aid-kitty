@@ -1,9 +1,29 @@
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.js";
 import { loadConfig, type Config } from "../src/config.js";
 import { openDb, type Db } from "../src/db.js";
+import { issueLicense, setLicensePublicKeyForTests } from "../src/license.js";
 import { SyncService } from "../src/sync.js";
+
+// A throwaway signing key, so tests exercise real signature checks.
+const keys = generateKeyPairSync("ed25519");
+export const testPrivateKeyPem = keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+setLicensePublicKeyForTests(keys.publicKey.export({ type: "spki", format: "pem" }).toString());
+
+export function testLicense(seats: number, expiresInDays = 365, customer = "Acme"): string {
+  const now = Date.now();
+  return JSON.stringify(
+    issueLicense(testPrivateKeyPem, {
+      id: `lic_test_${seats}_${expiresInDays}`,
+      customer,
+      seats,
+      issuedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + expiresInDays * 86_400_000).toISOString(),
+    }),
+  );
+}
 
 async function listen(server: Server): Promise<string> {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -159,6 +179,7 @@ export async function harness(over: Partial<Config> = {}): Promise<Harness> {
     databasePath: ":memory:",
     adminToken: "test-admin-token",
     auth: { devLogin: true, jitProvisioning: true, allowedEmailDomains: [] },
+    license: { text: testLicense(1000) },
     wallet: { defaultMonthlyBudgetUsd: 100, warnAt: 0.8 },
     connectors: {
       claude: { mode: "gateway", baseUrl: claude.url, apiKey: claude.key, enforceCaps: true },

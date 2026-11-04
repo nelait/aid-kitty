@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --disable-warning=ExperimentalWarning dist/src/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --disable-warning=ExperimentalWarning --import tsx --test test/*.test.ts"
+    "test": "node --disable-warning=ExperimentalWarning --import tsx --test test/*.test.ts",
+    "license": "tsx scripts/license.ts"
   },
   "dependencies": {
     "express": "^4.22.3",

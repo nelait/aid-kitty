@@ -10,6 +10,7 @@ import {
   reportCsv,
   spendReport,
 } from "../service.js";
+import { assertCanActivate, LicenseLimitError, licenseStatus, parseAndVerify } from "../license.js";
 import type { SyncService } from "../sync.js";
 import { currentPeriod, usdToCents, walletFor } from "../wallet.js";
 
@@ -181,6 +182,15 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     };
     const sets = Object.entries(fields).filter(([, v]) => v !== undefined);
     let u = getUserByEmail(db, email);
+    const activating = u ? u.status === "disabled" && status === "active" : status !== "disabled";
+    if (activating) {
+      try {
+        assertCanActivate(db, cfg);
+      } catch (e) {
+        if (e instanceof LicenseLimitError) throw new HttpError(403, `${email}: ${e.message}`);
+        throw e;
+      }
+    }
     try {
       if (!u) {
         db.prepare("INSERT INTO users (email) VALUES (?)").run(email);
@@ -279,6 +289,24 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
         return res.send(reportCsv(report));
       }
       res.json({ period, ...report });
+    }),
+  );
+
+  r.get("/admin/license", requireAdmin, (_req, res) => res.json(licenseStatus(db, cfg)));
+
+  r.put(
+    "/admin/license",
+    requireAdmin,
+    wrap((req, res) => {
+      const raw = req.body?.license_file;
+      const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
+      const parsed = parseAndVerify(text);
+      if (!parsed.ok) throw new HttpError(400, parsed.error);
+      db.prepare(
+        "INSERT INTO settings (key, value, updated_at) VALUES ('license', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+      ).run(text, nowIso());
+      audit(db, req.principal!.label, "license.installed", { id: parsed.license.id, seats: parsed.license.seats, expiresAt: parsed.license.expiresAt });
+      res.json(licenseStatus(db, cfg));
     }),
   );
 

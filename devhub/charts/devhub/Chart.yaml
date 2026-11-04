@@ -1,0 +1,6 @@
+apiVersion: v2
+name: devhub
+description: Dev Hub - one AI budget across Claude, GitHub Copilot and Cursor, with approvals, chargeback and SCIM.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

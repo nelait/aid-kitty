@@ -1,0 +1,9 @@
+node_modules
+dist
+*.db
+*.db-*
+devhub.config.json
+*.pem
+*.license.json
+charts
+terraform

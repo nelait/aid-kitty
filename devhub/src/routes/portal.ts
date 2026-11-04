@@ -3,6 +3,7 @@ import { csrfOk, type Principal } from "../auth.js";
 import type { Config } from "../config.js";
 import type { Db, RaiseRequest, User } from "../db.js";
 import { HttpError, createRaiseRequest, decideRaiseRequest, listDecidable, spendReport } from "../service.js";
+import { licenseStatus, type LicenseStatus } from "../license.js";
 import type { SyncService } from "../sync.js";
 import { currentPeriod, fmtUsd, walletFor } from "../wallet.js";
 
@@ -83,6 +84,14 @@ function walletCard(cfg: Config, w: ReturnType<typeof walletFor>): string {
     ${team}
     ${tools ? `<table><thead><tr><th>Tool</th><th class="n">Spent</th></tr></thead><tbody>${tools}</tbody></table>` : `<p class="muted">No spend recorded yet this month.</p>`}
   </div>`;
+}
+
+function licenseCard(l: LicenseStatus): string {
+  const attention = l.state !== "valid" || !l.canActivate || l.activeUsers > l.seats;
+  return `<div class="card"${attention ? ' style="border-color:var(--warn)"' : ""}><h2>License</h2>
+    <p>${esc(l.message)}</p><p class="muted">${l.activeUsers} active people · ${l.seats} seats${
+      l.licenseId ? ` · ${esc(l.licenseId)}` : ""
+    }. Install a license with <code>PUT /api/admin/license</code>.</p></div>`;
 }
 
 function requestsTable(rows: RaiseRequest[]): string {
@@ -215,7 +224,7 @@ export function portalRoutes(db: Db, cfg: Config, sync: SyncService) {
       page(
         "Admin",
         p,
-        `${flash(req)}<h1>Spend for ${esc(period)}</h1>
+        `${flash(req)}${licenseCard(licenseStatus(db, cfg))}<h1>Spend for ${esc(period)}</h1>
         <div class="card scroll"><h2>By team</h2><table><thead><tr><th>Team</th><th class="n">People</th><th class="n">Spent</th><th class="n">Budgets</th></tr></thead><tbody>
           ${[...teams]
             .sort((a, b) => b[1].spend - a[1].spend)

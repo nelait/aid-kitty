@@ -1,0 +1,72 @@
+image:
+  repository: ghcr.io/your-org/devhub
+  tag: ""            # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Dev Hub stores its data in SQLite on a persistent volume, so it runs as a single
+# replica and upgrades with the Recreate strategy (brief downtime, no split writes).
+persistence:
+  enabled: true
+  size: 2Gi
+  storageClass: ""   # cluster default when empty
+  existingClaim: ""
+
+# Non-secret settings, rendered into /etc/devhub/devhub.config.json.
+# See devhub.config.example.json in the app for every key.
+config:
+  publicUrl: https://devhub.example.com
+  claudeGatewayUrl: ""
+  auth:
+    oidc:
+      issuer: ""          # e.g. https://acme.okta.com/oauth2/default
+      clientId: ""
+      adminGroup: devhub-admins
+      groupsClaim: groups
+    devLogin: false
+    jitProvisioning: true
+    allowedEmailDomains: []
+  wallet:
+    defaultMonthlyBudgetUsd: 300
+    warnAt: 0.8
+  connectors: {}
+  #  claude:  { mode: gateway, baseUrl: https://claude-gateway.internal, enforceCaps: true }
+  #  copilot: { org: acme, apiUrl: https://api.github.com, seatPriceUsd: { business: 19, enterprise: 39 } }
+  #  cursor:  { apiUrl: https://api.cursor.com }
+  syncIntervalSeconds: 300
+
+# Secrets are read from a Kubernetes Secret as environment variables. Either point at a
+# Secret you manage (recommended: External Secrets, Vault, SOPS) or let the chart create
+# one from `secrets.values` (fine for evaluation; the values end up in Helm's release data).
+secrets:
+  existingSecret: ""
+  values: {}
+  # Recognized keys:
+  #   OIDC_CLIENT_SECRET, CLAUDE_ADMIN_KEY, GITHUB_TOKEN, CURSOR_API_KEY,
+  #   DEVHUB_ADMIN_TOKEN, DEVHUB_SCIM_TOKEN, DEVHUB_SLACK_WEBHOOK_URL, DEVHUB_LICENSE
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: devhub.example.com
+  tls:
+    enabled: true
+    secretName: devhub-tls
+
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { memory: 512Mi }
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""

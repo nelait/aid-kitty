@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { Config } from "../config.js";
 import { audit, getUser, nowIso, tx, type Db, type Team, type User } from "../db.js";
+import { assertCanActivate, LicenseLimitError } from "../license.js";
 import type { SyncService } from "../sync.js";
 
 /**
@@ -153,6 +154,7 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
     if (f.name !== undefined && f.name !== u.name) sets.push(["name", f.name]);
     if (f.externalId !== undefined && f.externalId !== u.scim_external_id) sets.push(["scim_external_id", f.externalId]);
     const status = f.active === undefined ? u.status : f.active ? "active" : "disabled";
+    if ((status === "active" && u.status !== "active") || (status === "active" && u.deleted_at)) checkSeat();
     if (status !== u.status) sets.push(["status", status]);
     if (sets.length) {
       db.prepare(`UPDATE users SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...sets.map(([, v]) => v), u.id);
@@ -161,6 +163,15 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
     if (status === "disabled") db.prepare("DELETE FROM web_sessions WHERE user_id = ?").run(u.id);
     return status !== u.status;
   }
+
+  const checkSeat = () => {
+    try {
+      assertCanActivate(db, cfg);
+    } catch (e) {
+      if (e instanceof LicenseLimitError) throw new ScimError(403, e.message);
+      throw e;
+    }
+  };
 
   const afterStatusChange = async (userId: number) => {
     await sync.pushCaps([userId]).catch((e) => console.error("cap push after SCIM change failed:", e));
@@ -219,11 +230,12 @@ export function scimRoutes(db: Db, cfg: Config, sync: SyncService) {
       }
       if (existing) {
         // Adopt a user an admin created by hand, or bring back one the IdP deleted earlier.
+        applyUser(existing, f);
         db.prepare("UPDATE users SET deleted_at = NULL WHERE id = ?").run(existing.id);
-        applyUser(getUser(db, existing.id)!, f);
         user = getUser(db, existing.id)!;
         audit(db, "scim", "scim.user.linked", { id: user.id, email: user.email });
       } else {
+        if (f.active !== false) checkSeat();
         const info = db
           .prepare("INSERT INTO users (email, name, status, scim_external_id) VALUES (?, ?, ?, ?)")
           .run(f.email!, f.name ?? null, f.active === false ? "disabled" : "active", f.externalId ?? null);

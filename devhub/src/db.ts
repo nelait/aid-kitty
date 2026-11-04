@@ -114,6 +114,11 @@ CREATE TABLE IF NOT EXISTS web_sessions (
   csrf TEXT NOT NULL,
   expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY,
   ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

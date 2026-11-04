@@ -4,6 +4,7 @@ import express from "express";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
 import type { Config, OidcConfig } from "./config.js";
 import { audit, getUser, getUserByEmail, nowIso, type Db, type User } from "./db.js";
+import { assertCanActivate, LicenseLimitError } from "./license.js";
 
 const COOKIE = "devhub_session";
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -124,6 +125,12 @@ export function upsertSsoUser(
   const adminGroup = cfg.auth.oidc?.adminGroup;
   if (!user) {
     if (!cfg.auth.jitProvisioning) return { error: "no Dev Hub account; ask an admin to add you" };
+    try {
+      assertCanActivate(db, cfg);
+    } catch (e) {
+      if (e instanceof LicenseLimitError) return { error: `can't create your account: ${e.message}` };
+      throw e;
+    }
     const team = groups.length
       ? (db
           .prepare(`SELECT id FROM teams WHERE name IN (${groups.map(() => "?").join(",")}) ORDER BY id LIMIT 1`)

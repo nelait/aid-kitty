@@ -62,6 +62,8 @@ export interface Config {
     /** Utilization (0-1) at which the wallet shows a warning. */
     warnAt: number;
   };
+  /** License file location or contents; an admin can also upload one in the portal API. */
+  license?: { file?: string; text?: string };
   /** Where developers point Claude Code (shown in the portal). */
   claudeGatewayUrl?: string;
   connectors: {
@@ -93,6 +95,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     databasePath: env.DEVHUB_DB ?? "devhub.db",
     adminToken: env.DEVHUB_ADMIN_TOKEN,
     scimToken: env.DEVHUB_SCIM_TOKEN,
+    license: { file: env.DEVHUB_LICENSE_FILE, text: env.DEVHUB_LICENSE },
     auth: {
       devLogin: env.DEVHUB_DEV_LOGIN === "true",
       jitProvisioning: true,
@@ -114,6 +117,8 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     notify: { ...base.notify, ...fromFile.notify, ...overrides.notify },
   };
 
+  // Blank OIDC settings (e.g. the Helm chart's placeholders) mean "not configured".
+  if (cfg.auth.oidc && (!cfg.auth.oidc.issuer || !cfg.auth.oidc.clientId)) delete cfg.auth.oidc;
   // Env vars fill in only what the file and explicit overrides left unset.
   if (!cfg.auth.oidc && env.OIDC_ISSUER && env.OIDC_CLIENT_ID && env.OIDC_CLIENT_SECRET) {
     cfg.auth.oidc = {

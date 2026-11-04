@@ -49,7 +49,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 37 tests: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, API + portal flows
+npm test                       # 43 tests: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 npm run build && npm start
 ```
 
@@ -67,6 +67,7 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `DEVHUB_ADMIN_TOKEN` | Bearer token for automation (onboarding scripts, Terraform) |
 | `DEVHUB_SCIM_TOKEN` | Bearer token Okta uses for SCIM provisioning at `/scim/v2`. SCIM is off when unset |
 | `DEVHUB_SLACK_WEBHOOK_URL` | Notifications for requests and decisions |
+| `DEVHUB_LICENSE` or `DEVHUB_LICENSE_FILE` | Signed license (contents or path). Admins can also install one with `PUT /api/admin/license` |
 | `DEVHUB_DEV_LOGIN=true` | Email-only login for local development. **Never in production.** |
 
 Set `claudeGatewayUrl` in the config file to show developers the gateway address on their wallet page.
@@ -83,6 +84,55 @@ curl -X POST $URL/api/admin/users $H -d '[
 ```
 
 Or let Okta do it: see [SCIM provisioning](#scim-provisioning-okta). People are linked to their Okta identity the first time they sign in. Anyone not added ahead of time is created on first sign-in (JIT) and placed in a team whose name matches one of their IdP groups.
+
+## Deploy (self-hosted)
+
+Dev Hub ships as a container image, a Helm chart and a Terraform module. It keeps its data in SQLite on a persistent volume, so it runs as **one replica** and upgrades with the Recreate strategy (a few seconds of downtime). Back up the volume (e.g. volume snapshots).
+
+**Container image** (`Dockerfile`): multi-stage Node 22 build, runs as the non-root `node` user, data in `/data`, config at `/etc/devhub/devhub.config.json`.
+
+```bash
+docker build -t ghcr.io/your-org/devhub:0.1.0 .
+```
+
+**Helm** (`charts/devhub`): non-secret settings go under `config:` and are rendered into the config file. Secrets come from a Kubernetes Secret as environment variables. Point `secrets.existingSecret` at one you manage (External Secrets, Vault), or set `secrets.values` for a quick evaluation. The pod runs non-root with a read-only root filesystem, all capabilities dropped and no service-account token.
+
+```bash
+helm install devhub charts/devhub -n devhub --create-namespace \
+  --set image.repository=ghcr.io/your-org/devhub \
+  --set config.publicUrl=https://devhub.acme.io \
+  --set config.auth.oidc.issuer=https://acme.okta.com/oauth2/default \
+  --set config.auth.oidc.clientId=0oa... \
+  --set secrets.existingSecret=devhub-secrets \
+  --set ingress.enabled=true --set ingress.host=devhub.acme.io
+```
+
+**Terraform** (`terraform/modules/devhub`): installs the chart into an existing cluster and creates the Secret. See `terraform/examples/basic` for a complete example. Secrets passed in `var.secrets` end up in Terraform state, so protect the state or pass `existing_secret` instead. The module outputs the Okta redirect URI and SCIM base URL to paste into Okta.
+
+## Licensing
+
+Licenses are JSON files signed with the vendor's Ed25519 key and checked offline: Dev Hub never calls home.
+
+| State | What happens |
+| --- | --- |
+| No license | Evaluation mode: up to 5 active people |
+| Valid | Up to the licensed seats plus 10% (at least one) for true-up |
+| Expired, within 30 days | Everything works; the admin page asks to renew |
+| Expired, after 30 days | Existing people keep working, but no one new can be added or reactivated |
+| Invalid signature | Treated as no license |
+
+A license problem **never turns off budget enforcement**: spend sync and Claude caps keep running, so the customer's cost controls don't depend on the license. Seat limits apply when people are added by the admin API, SCIM or first sign-in. A bulk import that would go over the limit is rejected as a whole.
+
+Vendor workflow:
+
+```bash
+npm run license -- keygen ./keys          # once: keep license-private.pem in a secret manager
+#   then paste license-public.pem into VENDOR_PUBLIC_KEY_PEM in src/license.ts and release
+npm run license -- issue --key ./keys/license-private.pem --customer "Acme" --seats 10 --days 365 --out acme.license.json
+npm run license -- verify acme.license.json
+```
+
+This build has **no vendor public key yet**, so every install runs in evaluation mode until you generate your key pair and set `VENDOR_PUBLIC_KEY_PEM`.
 
 ## SCIM provisioning (Okta)
 
@@ -145,7 +195,9 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1a)** | Wallet, team pools, Claude + Copilot connectors, cap enforcement, raise requests and approvals, chargeback CSV, Okta SSO, portal | The governance wedge |
 | **Done (Phase 1b)** | Copilot premium-request overage; Cursor connector | Heavy Copilot users and Cursor teams counted in the wallet |
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
-| P1 | Postgres option; Helm chart + Terraform module; signed license file | Self-hosted packaging for the license model |
+| **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
+| P1 | Postgres option (needs the data layer moved to async) | High availability and more than one replica |
+| P1 | Publish the image (CI), AWS/GCP Marketplace listings | Distribution |
 | P2 | Policy pack: generate the gateway's per-group `managed` blocks (MCP allowlist, permission denies) from one Dev Hub policy | One policy across tools |
 | P2 | Spend → output reporting (join spend with GitHub PRs and commits) | ROI view for finance |
 | Phase 2 | Workspaces in the customer's AWS/GCP (Coder as a backend, or a built-in EC2/GCE template) | |

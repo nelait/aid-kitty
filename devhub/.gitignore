@@ -3,3 +3,8 @@ dist/
 *.db
 *.db-*
 devhub.config.json
+*.pem
+*.license.json
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate*
