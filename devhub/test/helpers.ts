@@ -272,6 +272,21 @@ export class Client {
     return fetch(this.base + path, { headers: { cookie: this.cookie }, redirect: "manual" });
   }
 
+  /** Submit a portal form (urlencoded) with the CSRF token; returns the flash message from the redirect. */
+  async form(path: string, fields: Record<string, string>, opts: { csrf?: boolean } = {}) {
+    const body = new URLSearchParams(fields);
+    if (opts.csrf !== false) body.set("_csrf", this.csrf);
+    const res = await fetch(this.base + path, {
+      method: "POST",
+      headers: { cookie: this.cookie, "content-type": "application/x-www-form-urlencoded" },
+      body,
+      redirect: "manual",
+    });
+    const location = res.headers.get("location") ?? "";
+    const msg = new URL(location || "/", this.base).searchParams.get("msg");
+    return { status: res.status, location, msg };
+  }
+
   post(path: string, body: unknown, opts: { csrf?: boolean } = {}) {
     const headers: Record<string, string> = { cookie: this.cookie, "content-type": "application/json" };
     if (opts.csrf !== false) headers["x-devhub-csrf"] = this.csrf;

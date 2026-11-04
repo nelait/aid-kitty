@@ -49,7 +49,7 @@ Requires Node 22.13 or later.
 
 ```bash
 npm install
-npm test                       # 46 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
+npm test                       # 54 tests on SQLite: wallet math, connectors against mock Claude/GitHub/Cursor APIs, SCIM, licensing, API + portal flows
 DEVHUB_TEST_DATABASE_URL=postgres://postgres@localhost:5432/postgres npm test   # the same suite on Postgres (creates and drops a database per test file)
 npm run build && npm start
 ```
@@ -71,6 +71,18 @@ Configure it with environment variables or a `devhub.config.json` file (see `dev
 | `DEVHUB_SLACK_WEBHOOK_URL` | Notifications for requests and decisions |
 | `DEVHUB_LICENSE` or `DEVHUB_LICENSE_FILE` | Signed license (contents or path). Admins can also install one with `PUT /api/admin/license` |
 | `DEVHUB_DEV_LOGIN=true` | Email-only login for local development. **Never in production.** |
+
+Day to day, admins work in the portal under **Admin**:
+
+| Page | What it does |
+| --- | --- |
+| Overview | Spend by team and person, chargeback CSV, sync status, license summary |
+| People | Search, add, edit (team, role, status, budget, GitHub login, Claude ID) and import a CSV. Admins can't demote or disable themselves |
+| Teams | Add and edit teams, cost centers, per-person budgets and shared pools; members' caps update on save |
+| Unmatched spend | Spend from accounts no one is linked to; link a Claude identity or GitHub login to a person and their spend moves into their budget |
+| License | Status, seats and expiry; paste a license file to install it |
+
+Everything there is also available through the API below.
 
 Set `claudeGatewayUrl` in the config file to show developers the gateway address on their wallet page.
 
@@ -208,6 +220,7 @@ Cookie-authenticated writes need the session's CSRF token in `x-devhub-csrf` or 
 | **Done (Phase 1c)** | SCIM 2.0 for Okta (users, groups → teams, instant deprovisioning) | No manual user import; offboarding cuts AI spend immediately |
 | **Done (Phase 1d)** | Container image, Helm chart, Terraform module, signed license file with seat limits | Self-hosted packaging for the license model |
 | **Done (Phase 1e)** | Postgres support, several replicas, sync leader lease | High availability |
+| **Done (Phase 1g)** | Admin pages in the portal: people (add, edit, search, CSV import), teams and budgets, unmatched spend linking, license install | Run Dev Hub without the API |
 | **Done (Phase 1f)** | CI: tests on SQLite and Postgres, Helm and Terraform checks, image build; publishes to GHCR from `main` and `devhub-v*` tags | Every change checked; image ready to deploy |
 | P1 | AWS/GCP Marketplace listings | Distribution |
 | P2 | Policy pack: generate the gateway's per-group `managed` blocks (MCP allowlist, permission denies) from one Dev Hub policy | One policy across tools |

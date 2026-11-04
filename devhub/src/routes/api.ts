@@ -1,7 +1,8 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { requireAdmin, requireUser } from "../auth.js";
 import type { Config } from "../config.js";
-import { audit, getUser, getUserByEmail, insertId, isUniqueViolation, nowIso, type Db, type Param, type Queryable, type User } from "../db.js";
+import { audit, getUserByEmail, nowIso, type Db, type User } from "../db.js";
+import { installLicense, publicUser, saveTeam, upsertUsers } from "../admin.js";
 import {
   HttpError,
   createRaiseRequest,
@@ -10,7 +11,7 @@ import {
   reportCsv,
   spendReport,
 } from "../service.js";
-import { assertCanActivate, LicenseLimitError, licenseStatus, parseAndVerify } from "../license.js";
+import { licenseStatus } from "../license.js";
 import type { SyncService } from "../sync.js";
 import { currentPeriod, usdToCents, walletFor } from "../wallet.js";
 
@@ -20,36 +21,6 @@ const wrap = (fn: Handler) => (req: Request, res: Response, next: NextFunction) 
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const TOOL_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
-
-function optUsdToCents(v: unknown, field: string): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null) return null;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) throw new HttpError(400, `${field} must be a non-negative number or null`);
-  return usdToCents(n);
-}
-
-function optStr(v: unknown, field: string): string | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null || v === "") return null;
-  if (typeof v !== "string" || v.length > 200) throw new HttpError(400, `${field} must be a string`);
-  return v.trim();
-}
-
-function publicUser(u: User) {
-  return {
-    id: u.id,
-    email: u.email,
-    name: u.name,
-    team_id: u.team_id,
-    role: u.role,
-    status: u.status,
-    github_login: u.github_login,
-    claude_user_id: u.claude_user_id,
-    sso_linked: u.oidc_sub !== null,
-    monthly_budget_usd: u.monthly_budget_cents === null ? null : u.monthly_budget_cents / 100,
-  };
-}
 
 export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
   const r = express.Router();
@@ -113,49 +84,11 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
   // ---- Admin: teams ----
   r.get("/admin/teams", requireAdmin, wrap(async (_req, res) => res.json(await db.all("SELECT * FROM teams ORDER BY name"))));
 
-  const saveTeam = async (id: number | null, b: Record<string, unknown>, actor: string) => {
-    const name = optStr(b.name, "name");
-    const cost = optStr(b.cost_center, "cost_center");
-    const pool = optUsdToCents(b.monthly_pool_usd, "monthly_pool_usd");
-    const def = optUsdToCents(b.member_default_usd, "member_default_usd");
-    try {
-      if (id === null) {
-        if (!name) throw new HttpError(400, "name is required");
-        id = await insertId(
-          db,
-          "INSERT INTO teams (name, cost_center, monthly_pool_cents, member_default_cents) VALUES (?, ?, ?, ?)",
-          name,
-          cost ?? null,
-          pool ?? null,
-          def ?? null,
-        );
-      } else {
-        if (!(await db.get("SELECT id FROM teams WHERE id = ?", id))) throw new HttpError(404, "team not found");
-        const sets: [string, Param][] = [];
-        if (name) sets.push(["name", name]);
-        if (cost !== undefined) sets.push(["cost_center", cost]);
-        if (pool !== undefined) sets.push(["monthly_pool_cents", pool]);
-        if (def !== undefined) sets.push(["member_default_cents", def]);
-        if (sets.length) {
-          await db.run(`UPDATE teams SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`, ...sets.map(([, v]) => v), id);
-        }
-      }
-    } catch (e) {
-      if (isUniqueViolation(e)) throw new HttpError(409, `a team named ${name} already exists`);
-      throw e;
-    }
-    await audit(db, actor, "team.saved", { id, ...b });
-    // Team budgets feed every member's wallet: re-check their caps.
-    const members = (await db.all<{ id: number }>("SELECT id FROM users WHERE team_id = ?", id)).map((m) => m.id);
-    if (members.length) await sync.pushCaps(members).catch((e) => console.error("cap push failed:", e));
-    return db.get("SELECT * FROM teams WHERE id = ?", id);
-  };
-
-  r.post("/admin/teams", requireAdmin, wrap(async (req, res) => res.status(201).json(await saveTeam(null, req.body, req.principal!.label))));
+  r.post("/admin/teams", requireAdmin, wrap(async (req, res) => res.status(201).json(await saveTeam(db, sync, null, req.body, req.principal!.label))));
   r.patch(
     "/admin/teams/:id",
     requireAdmin,
-    wrap(async (req, res) => res.json(await saveTeam(Number(req.params.id), req.body, req.principal!.label))),
+    wrap(async (req, res) => res.json(await saveTeam(db, sync, Number(req.params.id), req.body, req.principal!.label))),
   );
 
   // ---- Admin: users ----
@@ -170,75 +103,12 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     }),
   );
 
-  const ROLES = ["member", "manager", "admin"];
-  const teamIdByName = async (q: Queryable, name: string | null | undefined): Promise<number | null | undefined> => {
-    if (name === undefined) return undefined;
-    if (name === null) return null;
-    const t = await q.get<{ id: number }>("SELECT id FROM teams WHERE name = ?", name);
-    if (!t) throw new HttpError(400, `unknown team "${name}"`);
-    return t.id;
-  };
-
-  /** Create or update by email. Used for single edits and bulk onboarding; runs inside a transaction. */
-  const upsertUser = async (q: Queryable, b: Record<string, unknown>, actor: string): Promise<User> => {
-    const email = optStr(b.email, "email")?.toLowerCase();
-    if (!email || !/^[^@\s]+@[^@\s]+$/.test(email)) throw new HttpError(400, "valid email is required");
-    const role = b.role === undefined ? undefined : String(b.role);
-    if (role !== undefined && !ROLES.includes(role)) throw new HttpError(400, `role must be one of ${ROLES.join(", ")}`);
-    const status = b.status === undefined ? undefined : String(b.status);
-    if (status !== undefined && !["active", "disabled"].includes(status)) throw new HttpError(400, "bad status");
-    const fields: Record<string, Param | undefined> = {
-      name: optStr(b.name, "name"),
-      team_id: await teamIdByName(q, optStr(b.team, "team")),
-      role,
-      status,
-      github_login: optStr(b.github_login, "github_login")?.toLowerCase(),
-      claude_user_id: optStr(b.claude_user_id, "claude_user_id"),
-      monthly_budget_cents: optUsdToCents(b.monthly_budget_usd, "monthly_budget_usd"),
-    };
-    const sets = Object.entries(fields).filter((e): e is [string, Param] => e[1] !== undefined);
-    let u = await getUserByEmail(q, email);
-    const activating = u ? u.status === "disabled" && status === "active" : status !== "disabled";
-    if (activating) {
-      try {
-        await assertCanActivate(q, cfg);
-      } catch (e) {
-        if (e instanceof LicenseLimitError) throw new HttpError(403, `${email}: ${e.message}`);
-        throw e;
-      }
-    }
-    try {
-      if (!u) {
-        await q.run("INSERT INTO users (email) VALUES (?)", email);
-        u = (await getUserByEmail(q, email))!;
-      }
-      if (sets.length) {
-        await q.run(`UPDATE users SET ${sets.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`, ...sets.map(([, v]) => v), u.id);
-      }
-    } catch (e) {
-      if (isUniqueViolation(e)) throw new HttpError(409, `${email}: github_login or claude_user_id is already used by another user`);
-      throw e;
-    }
-    if (status === "disabled") await q.run("DELETE FROM web_sessions WHERE user_id = ?", u.id);
-    // Re-activating someone the IdP deleted brings them back into SCIM as well.
-    if (status === "active") await q.run("UPDATE users SET deleted_at = NULL WHERE id = ?", u.id);
-    await audit(q, actor, "user.saved", { email, ...Object.fromEntries(sets) });
-    return (await getUser(q, u.id))!;
-  };
-
   r.post(
     "/admin/users",
     requireAdmin,
     wrap(async (req, res) => {
       const list = Array.isArray(req.body) ? req.body : [req.body];
-      if (list.length > 5000) throw new HttpError(400, "at most 5000 users per call");
-      const saved = await db.tx(async (q) => {
-        const out: User[] = [];
-        for (const b of list) out.push(await upsertUser(q, b, req.principal!.label));
-        return out;
-      });
-      // A role, status, team or budget change moves caps; push them now.
-      await sync.pushCaps(saved.map((u) => u.id)).catch((e) => console.error("cap push failed:", e));
+      const saved = await upsertUsers(db, cfg, sync, list, req.principal!.label);
       res.status(201).json(saved.map(publicUser));
     }),
   );
@@ -323,18 +193,7 @@ export function apiRoutes(db: Db, cfg: Config, sync: SyncService) {
     wrap(async (req, res) => {
       const raw = req.body?.license_file;
       const text = typeof raw === "string" ? raw : JSON.stringify(raw ?? null);
-      const parsed = parseAndVerify(text);
-      if (!parsed.ok) throw new HttpError(400, parsed.error);
-      await db.run(
-        "INSERT INTO settings (key, value, updated_at) VALUES ('license', ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        text,
-        nowIso(),
-      );
-      await audit(db, req.principal!.label, "license.installed", {
-        id: parsed.license.id,
-        seats: parsed.license.seats,
-        expiresAt: parsed.license.expiresAt,
-      });
+      await installLicense(db, text, req.principal!.label);
       res.json(await licenseStatus(db, cfg));
     }),
   );

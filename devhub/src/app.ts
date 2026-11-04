@@ -3,6 +3,7 @@ import { authRoutes, identify } from "./auth.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import { apiRoutes } from "./routes/api.js";
+import { adminPortalRoutes } from "./routes/admin-portal.js";
 import { portalRoutes } from "./routes/portal.js";
 import { scimRoutes } from "./routes/scim.js";
 import type { SyncService } from "./sync.js";
@@ -23,6 +24,7 @@ export function createApp(db: Db, cfg: Config, sync: SyncService) {
   app.use(authRoutes(db, cfg));
   app.use("/scim/v2", scimRoutes(db, cfg, sync));
   app.use("/api", apiRoutes(db, cfg, sync));
+  app.use(adminPortalRoutes(db, cfg, sync));
   app.use(portalRoutes(db, cfg, sync));
   return app;
 }
